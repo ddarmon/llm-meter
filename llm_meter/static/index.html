@@ -376,6 +376,112 @@
   .modal-title small { color: var(--muted); font-weight: 400; margin-left: 8px; }
   .modal-body { padding: 18px 22px 28px; }
 
+  /* ---------- transcript tabs ---------- */
+  .tab-strip {
+    display: flex;
+    gap: 2px;
+    margin: -2px 0 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    padding: 8px 14px;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .tab-pane.hidden { display: none; }
+
+  .raw-section { margin-bottom: 16px; }
+  .raw-section > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px 8px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .raw-section[open] > summary { border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .raw-section > summary::-webkit-details-marker { display: none; }
+  .raw-section > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+    color: var(--muted);
+    transition: transform 0.1s;
+  }
+  .raw-section[open] > summary::before { transform: rotate(90deg); }
+  .raw-section > summary .label { flex: 1; }
+  .copy-btn {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    cursor: pointer;
+  }
+  .copy-btn:hover { border-color: var(--border-strong); }
+  .copy-btn.flash { background: var(--cache-soft); color: var(--cache); border-color: #aceebb; }
+  pre.json, pre.raw-text {
+    margin: 0;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+    max-height: 480px;
+  }
+  .json-key    { color: #0550ae; }
+  .json-string { color: #0a7c3a; }
+  .json-number { color: #8250df; }
+  .json-bool   { color: #bc4c00; font-weight: 600; }
+  .json-null   { color: var(--muted); font-style: italic; }
+  .raw-banner {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--cost-soft);
+    color: var(--cost);
+    border: 1px solid #ffcfc9;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .raw-empty {
+    padding: 18px 0;
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+  }
+
   .summary-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -1098,6 +1204,127 @@ function computeCacheState(req) {
 
 let lastTranscript = null;
 
+// ---------- raw-JSON tab helpers ----------
+
+function highlightJson(value) {
+  let text;
+  try {
+    text = JSON.stringify(value, null, 2);
+  } catch (_) {
+    return escapeHtml(String(value));
+  }
+  if (text === undefined) return "";
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped.replace(
+    /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (m, str, colon, kw) => {
+      if (str !== undefined) {
+        if (colon) return `<span class="json-key">${str}</span>${colon}`;
+        return `<span class="json-string">${str}</span>`;
+      }
+      if (kw !== undefined) {
+        const cls = kw === "null" ? "json-null" : "json-bool";
+        return `<span class="${cls}">${kw}</span>`;
+      }
+      return `<span class="json-number">${m}</span>`;
+    }
+  );
+}
+
+let rawCopyTargets = [];
+function rawSection(label, copyText, bodyHtml, opts) {
+  const open = !opts || opts.open !== false;
+  const idx = rawCopyTargets.length;
+  rawCopyTargets.push(copyText ?? "");
+  return `<details class="raw-section"${open ? " open" : ""}>
+    <summary>
+      <span class="label">${escapeHtml(label)}</span>
+      <button class="copy-btn" data-copy-idx="${idx}" type="button">Copy</button>
+    </summary>
+    ${bodyHtml}
+  </details>`;
+}
+
+function renderRawTab(wire) {
+  rawCopyTargets = [];
+  if (!wire) {
+    return '<div class="raw-empty">No wire data captured for this request.</div>';
+  }
+  const sections = [];
+
+  // Request body
+  if (wire.request_body) {
+    let parsed = null;
+    try { parsed = JSON.parse(wire.request_body); } catch (_) {}
+    if (parsed !== null) {
+      const pretty = JSON.stringify(parsed, null, 2);
+      sections.push(rawSection(
+        "Request body (as sent by client)",
+        pretty,
+        `<pre class="json">${highlightJson(parsed)}</pre>`,
+      ));
+    } else {
+      sections.push(rawSection(
+        "Request body (raw, not valid JSON)",
+        wire.request_body,
+        `<pre class="raw-text">${escapeHtml(wire.request_body)}</pre>`,
+      ));
+    }
+  }
+
+  // Non-streaming response body
+  if (wire.response_body) {
+    let parsed = null;
+    try { parsed = JSON.parse(wire.response_body); } catch (_) {}
+    if (parsed !== null) {
+      const pretty = JSON.stringify(parsed, null, 2);
+      sections.push(rawSection(
+        "Response body (from upstream)",
+        pretty,
+        `<pre class="json">${highlightJson(parsed)}</pre>`,
+      ));
+    } else {
+      sections.push(rawSection(
+        "Response body (raw)",
+        wire.response_body,
+        `<pre class="raw-text">${escapeHtml(wire.response_body)}</pre>`,
+      ));
+    }
+  }
+
+  // Streaming response — events list
+  const stream = wire.response_stream;
+  if (stream && Array.isArray(stream.events) && stream.events.length) {
+    const eventsPretty = JSON.stringify(stream.events, null, 2);
+    sections.push(rawSection(
+      `SSE events (${stream.events.length} parsed)`,
+      eventsPretty,
+      `<pre class="json">${highlightJson(stream.events)}</pre>`,
+    ));
+  }
+
+  // Streaming response — raw concatenated stream
+  if (stream && stream.raw) {
+    sections.push(rawSection(
+      "SSE raw stream (wire bytes)",
+      stream.raw,
+      `<pre class="raw-text">${escapeHtml(stream.raw)}</pre>`,
+    ));
+  }
+
+  const banner = wire.truncated
+    ? `<div class="raw-banner">Capture truncated at the soft cap. The parsed events list above is still complete; only the raw byte stream was cut.</div>`
+    : "";
+
+  if (sections.length === 0) {
+    return banner + '<div class="raw-empty">No wire data captured for this request.</div>';
+  }
+  return banner + sections.join("");
+}
+
 function renderTranscript(t) {
   lastTranscript = t;
   const s = t.summary || {};
@@ -1161,7 +1388,13 @@ function renderTranscript(t) {
        ${renderResponseTurn(resp, req.format)}`
     : "";
 
-  el.modalBody.innerHTML = `
+  const tabStrip = `
+    <div class="tab-strip" id="transcript-tabs">
+      <button class="tab-btn active" data-tab="pretty" type="button">Pretty</button>
+      <button class="tab-btn" data-tab="raw" type="button">Raw JSON</button>
+    </div>`;
+
+  const prettyHtml = `
     ${summaryGrid}
     ${banner}
     ${legend}
@@ -1169,6 +1402,14 @@ function renderTranscript(t) {
     <div class="section-label">Messages sent as input (${fmtN.format(messages.length)})</div>
     ${turnsHtml || '<div style="color:var(--muted); font-style:italic; padding:8px 0;">No messages</div>'}
     ${respHtml}
+  `;
+
+  const rawHtml = renderRawTab(t.wire);
+
+  el.modalBody.innerHTML = `
+    ${tabStrip}
+    <div class="tab-pane active" id="tab-pretty">${prettyHtml}</div>
+    <div class="tab-pane hidden" id="tab-raw">${rawHtml}</div>
   `;
 }
 
@@ -1245,6 +1486,51 @@ el.feed.addEventListener("click", (e) => {
 el.modalClose.addEventListener("click", closeModal);
 el.modalBg.addEventListener("click", (e) => { if (e.target === el.modalBg) closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+el.modalBody.addEventListener("click", (e) => {
+  const tab = e.target.closest(".tab-btn[data-tab]");
+  if (tab) {
+    const which = tab.dataset.tab;
+    el.modalBody.querySelectorAll(".tab-btn").forEach(b => {
+      b.classList.toggle("active", b.dataset.tab === which);
+    });
+    const prettyPane = el.modalBody.querySelector("#tab-pretty");
+    const rawPane = el.modalBody.querySelector("#tab-raw");
+    if (prettyPane) prettyPane.classList.toggle("hidden", which !== "pretty");
+    if (rawPane) rawPane.classList.toggle("hidden", which !== "raw");
+    return;
+  }
+  const copy = e.target.closest(".copy-btn[data-copy-idx]");
+  if (copy) {
+    e.preventDefault();
+    const text = rawCopyTargets[parseInt(copy.dataset.copyIdx, 10)] || "";
+    const original = copy.textContent;
+    const flash = (msg) => {
+      copy.textContent = msg;
+      copy.classList.add("flash");
+      setTimeout(() => {
+        copy.textContent = original;
+        copy.classList.remove("flash");
+      }, 1000);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => flash("Copied"),
+        () => flash("Failed"),
+      );
+    } else {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        flash("Copied");
+      } catch (_) { flash("Failed"); }
+    }
+  }
+});
 
 connect();
 </script>
