@@ -64,12 +64,14 @@ class Usage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    thinking_tokens: int = 0
 
     def merge(self, other: "Usage") -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cache_read_tokens += other.cache_read_tokens
         self.cache_creation_tokens += other.cache_creation_tokens
+        self.thinking_tokens += other.thinking_tokens
 
     def is_empty(self) -> bool:
         return (
@@ -77,6 +79,7 @@ class Usage:
             and self.output_tokens == 0
             and self.cache_read_tokens == 0
             and self.cache_creation_tokens == 0
+            and self.thinking_tokens == 0
         )
 
     def to_dict(self) -> dict[str, int]:
@@ -85,6 +88,7 @@ class Usage:
             "output_tokens": self.output_tokens,
             "cache_read_tokens": self.cache_read_tokens,
             "cache_creation_tokens": self.cache_creation_tokens,
+            "thinking_tokens": self.thinking_tokens,
         }
 
 
@@ -102,6 +106,9 @@ def _costs_for(u: Usage) -> dict[str, float]:
 
 
 def parse_anthropic_usage(usage: dict[str, Any]) -> Usage:
+    # Anthropic bundles extended-thinking tokens into output_tokens and does
+    # not break them out in `usage`. We derive an estimate from the thinking
+    # block text in derive_anthropic_thinking_tokens().
     return Usage(
         input_tokens=int(usage.get("input_tokens", 0) or 0),
         output_tokens=int(usage.get("output_tokens", 0) or 0),
@@ -112,15 +119,37 @@ def parse_anthropic_usage(usage: dict[str, Any]) -> Usage:
 
 def parse_openai_usage(usage: dict[str, Any]) -> Usage:
     cached = 0
+    thinking = 0
     details = usage.get("prompt_tokens_details") or {}
     if isinstance(details, dict):
         cached = int(details.get("cached_tokens", 0) or 0)
+    completion_details = usage.get("completion_tokens_details") or {}
+    if isinstance(completion_details, dict):
+        thinking = int(completion_details.get("reasoning_tokens", 0) or 0)
     prompt = int(usage.get("prompt_tokens", 0) or 0)
     return Usage(
         input_tokens=max(prompt - cached, 0),
         output_tokens=int(usage.get("completion_tokens", 0) or 0),
         cache_read_tokens=cached,
+        thinking_tokens=thinking,
     )
+
+
+def derive_anthropic_thinking_tokens(response_payload: Optional[dict[str, Any]]) -> int:
+    # Anthropic's `usage` doesn't break out thinking tokens (they're folded
+    # into `output_tokens`). Estimate from the assembled thinking-block text
+    # using ~4 chars/token — close enough for a "incl. ~N thinking" hint.
+    if not isinstance(response_payload, dict):
+        return 0
+    content = response_payload.get("content")
+    if not isinstance(content, list):
+        return 0
+    chars = sum(
+        len(b.get("thinking") or "")
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "thinking"
+    )
+    return chars // 4
 
 
 def parse_full_response_usage(payload: dict[str, Any]) -> Usage:
@@ -189,6 +218,7 @@ def parse_full_response_content(payload: dict[str, Any], fmt: str) -> Optional[d
         return {
             "role": "assistant",
             "content": msg.get("content"),
+            "reasoning_content": msg.get("reasoning_content"),
             "tool_calls": msg.get("tool_calls"),
             "finish_reason": (choices[0] or {}).get("finish_reason"),
         }
@@ -207,6 +237,7 @@ class StreamAccumulator:
         self._anth_stop_reason: Optional[str] = None
         # OpenAI state
         self._oai_text = ""
+        self._oai_reasoning_text = ""
         self._oai_tool_calls: dict[int, dict[str, Any]] = {}
         self._oai_finish_reason: Optional[str] = None
 
@@ -250,6 +281,8 @@ class StreamAccumulator:
                 block.setdefault("text", "")
             elif block.get("type") == "tool_use":
                 block.setdefault("input", {})
+            elif block.get("type") == "thinking":
+                block.setdefault("thinking", "")
             self._anth_blocks[idx] = block
             self._anth_partial_json[idx] = ""
         elif etype == "content_block_delta":
@@ -264,6 +297,8 @@ class StreamAccumulator:
                 self._anth_partial_json[idx] = (
                     self._anth_partial_json.get(idx, "") + (d.get("partial_json") or "")
                 )
+            elif d.get("type") == "thinking_delta":
+                block["thinking"] = (block.get("thinking") or "") + (d.get("thinking") or "")
         elif etype == "content_block_stop":
             idx = evt.get("index", 0)
             block = self._anth_blocks.get(idx)
@@ -282,6 +317,7 @@ class StreamAccumulator:
                 self.usage.input_tokens = parsed.input_tokens
                 self.usage.output_tokens = parsed.output_tokens
                 self.usage.cache_read_tokens = parsed.cache_read_tokens
+                self.usage.thinking_tokens = parsed.thinking_tokens
         choices = evt.get("choices") or []
         if not choices:
             return
@@ -289,6 +325,8 @@ class StreamAccumulator:
         delta = ch.get("delta") or {}
         if delta.get("content"):
             self._oai_text += delta["content"]
+        if delta.get("reasoning_content"):
+            self._oai_reasoning_text += delta["reasoning_content"]
         for tc in delta.get("tool_calls") or []:
             idx = tc.get("index", 0)
             existing = self._oai_tool_calls.setdefault(
@@ -320,6 +358,7 @@ class StreamAccumulator:
             return {
                 "role": "assistant",
                 "content": self._oai_text or None,
+                "reasoning_content": self._oai_reasoning_text or None,
                 "tool_calls": tc,
                 "finish_reason": self._oai_finish_reason,
             }
@@ -402,6 +441,9 @@ class Stats:
         if usage.is_empty() and not request_payload:
             return None
 
+        if usage.thinking_tokens == 0 and (request_payload or {}).get("format") == "anthropic":
+            usage.thinking_tokens = derive_anthropic_thinking_tokens(response_payload)
+
         self.total.merge(usage)
         self.request_seq += 1
         rid = self.request_seq
@@ -420,6 +462,7 @@ class Stats:
             "output_tokens": usage.output_tokens,
             "cache_read_tokens": usage.cache_read_tokens,
             "cache_creation_tokens": usage.cache_creation_tokens,
+            "thinking_tokens": usage.thinking_tokens,
             "costs": _costs_for(usage),
             "duration_ms": duration_ms,
             "message_count": len(msgs),
