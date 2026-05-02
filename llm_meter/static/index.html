@@ -846,7 +846,9 @@ function renderContentBlocks(content) {
   // Anthropic-style content array OR a plain string OR null
   if (content == null) return "";
   if (typeof content === "string") {
-    return `<div class="block">${escapeHtml(content)}</div>`;
+    // .turn-body uses pre-wrap, so leading/trailing newlines from the model
+    // would render as visible blank rows above/below the text.
+    return `<div class="block">${escapeHtml(content.replace(/^\s+|\s+$/g, ""))}</div>`;
   }
   if (!Array.isArray(content)) {
     return `<pre class="json">${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
@@ -857,7 +859,7 @@ function renderContentBlocks(content) {
     }
     const t = block.type;
     if (t === "text") {
-      return `<div class="block">${escapeHtml(block.text || "")}</div>`;
+      return `<div class="block">${escapeHtml((block.text || "").replace(/^\s+|\s+$/g, ""))}</div>`;
     }
     if (t === "tool_use") {
       const args = block.input != null ? JSON.stringify(block.input, null, 2) : "";
@@ -893,7 +895,7 @@ function renderOpenAIContent(msg) {
   }
   if (msg.content != null) {
     if (typeof msg.content === "string") {
-      html += `<div class="block">${escapeHtml(msg.content)}</div>`;
+      html += `<div class="block">${escapeHtml(msg.content.replace(/^\s+|\s+$/g, ""))}</div>`;
     } else {
       html += renderContentBlocks(msg.content);
     }
