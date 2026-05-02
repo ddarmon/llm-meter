@@ -23,6 +23,8 @@
     --out-soft: #fff1e5;
     --cache-soft: #dafbe1;
     --cost-soft: #ffebe9;
+    --think: #8250df;
+    --think-soft: #fbefff;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -419,6 +421,49 @@
     overflow-y: auto;
   }
 
+  details.thinking {
+    border-left: 2px solid #d8b9ff;
+    margin: 0 0 6px 0;
+    padding: 0;
+  }
+  details.thinking > summary {
+    cursor: pointer;
+    padding: 2px 0 2px 8px;
+    font-size: 11px;
+    color: var(--think);
+    list-style: none;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    user-select: none;
+  }
+  details.thinking > summary::-webkit-details-marker { display: none; }
+  details.thinking > summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 10px;
+    margin-right: 4px;
+    color: var(--think);
+    font-size: 9px;
+  }
+  details.thinking[open] > summary::before { content: "▾"; }
+  details.thinking > summary .sig {
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 6px;
+    font-size: 10px;
+  }
+  details.thinking > .think-body {
+    padding: 4px 0 6px 8px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+    line-height: 1.5;
+    font-style: italic;
+  }
+
   /* Every message in the messages[] array is INPUT this turn (regardless of
      its original role). The assistant's response is OUTPUT this turn. So the
      border color here reflects the *role in this request*, not the conversation
@@ -664,7 +709,8 @@ function renderHeadline(snap) {
     el.sInput.textContent = t.cache_creation_tokens > 0
       ? `+${fmtN.format(t.cache_creation_tokens)} cache writes`
       : " ";
-    el.sOutput.textContent = " ";
+    el.sOutput.textContent = t.thinking_tokens > 0
+      ? `incl. ${fmtN.format(t.thinking_tokens)} thinking` : " ";
   } else {
     el.costModeLabel.innerHTML = `Per-turn cost &mdash; ${escapeHtml(modelLabel())} rates`;
     if (!latest) {
@@ -695,7 +741,12 @@ function renderHeadline(snap) {
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
       : " ";
-    el.sOutput.textContent = `model: ${latest.model || "?"}`;
+    let modelInfo = `model: ${latest.model || "?"}`;
+    if (latest.thinking_tokens > 0) {
+      const approx = latest.format === "anthropic" ? "~" : "";
+      modelInfo += ` · ${approx}${fmtN.format(latest.thinking_tokens)} thinking`;
+    }
+    el.sOutput.textContent = modelInfo;
     el.sCache.textContent = promptSize > 0 && latest.cache_read_tokens > 0
       ? `${(latest.cache_read_tokens / promptSize * 100).toFixed(1)}% cached`
       : " ";
@@ -729,7 +780,7 @@ function renderFeed(snap) {
       <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
       ${pill}
       <span class="num in">${fmtN.format(r.input_tokens)}</span>
-      <span class="num out">${fmtN.format(r.output_tokens)}</span>
+      <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
       <span class="num cache">${fmtN.format(r.cache_read_tokens)}</span>
       <span class="cost">${fmtCost(costOf(r))}</span>
     </div>`;
@@ -761,6 +812,16 @@ function systemAsText(sys) {
     return sys.map(b => (typeof b === "string" ? b : (b?.text ?? JSON.stringify(b)))).join("\n\n");
   }
   return JSON.stringify(sys, null, 2);
+}
+
+function renderThinkingBlock(text, signature) {
+  const sig = signature
+    ? `<span class="sig">sig ${escapeHtml(signature.slice(0, 8))}…</span>`
+    : "";
+  return `<details class="thinking">
+    <summary>Thinking${sig}</summary>
+    <div class="think-body">${escapeHtml(text || "")}</div>
+  </details>`;
 }
 
 function renderContentBlocks(content) {
@@ -795,6 +856,9 @@ function renderContentBlocks(content) {
         ${typeof c === "string" ? `<div>${body}</div>` : body}
       </div>`;
     }
+    if (t === "thinking") {
+      return renderThinkingBlock(block.thinking, block.signature);
+    }
     if (t === "image") {
       return `<div class="block"><span class="block-label">image</span></div>`;
     }
@@ -803,9 +867,12 @@ function renderContentBlocks(content) {
 }
 
 function renderOpenAIContent(msg) {
-  // OpenAI assistant: { content: string|null, tool_calls: [{id, type, function:{name, arguments}}] }
+  // OpenAI assistant: { content: string|null, reasoning_content: string|null, tool_calls: [...] }
   // OpenAI user/tool: { content: string }
   let html = "";
+  if (msg.reasoning_content) {
+    html += renderThinkingBlock(msg.reasoning_content);
+  }
   if (msg.content != null) {
     if (typeof msg.content === "string") {
       html += `<div class="block">${escapeHtml(msg.content)}</div>`;
@@ -935,7 +1002,7 @@ function renderTranscript(t) {
   const summaryGrid = `
     <div class="summary-grid">
       <div class="summary-cell"><div class="l">Input</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div></div>
-      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
       <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
     </div>`;
