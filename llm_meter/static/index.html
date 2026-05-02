@@ -423,7 +423,7 @@
 
   details.thinking {
     border-left: 2px solid #d8b9ff;
-    margin: 0 0 6px 0;
+    margin: 0 0 4px 0;
     padding: 0;
   }
   details.thinking > summary {
@@ -453,7 +453,7 @@
     font-size: 10px;
   }
   details.thinking > .think-body {
-    padding: 4px 0 6px 8px;
+    padding: 2px 0 2px 8px;
     font-size: 12px;
     color: var(--muted);
     white-space: pre-wrap;
@@ -818,9 +818,12 @@ function renderThinkingBlock(text, signature) {
   const sig = signature
     ? `<span class="sig">sig ${escapeHtml(signature.slice(0, 8))}…</span>`
     : "";
+  // Models often emit leading/trailing newlines in thinking text; pre-wrap
+  // would render those as a tall empty band before/after the content.
+  const trimmed = (text || "").replace(/^\s+|\s+$/g, "");
   return `<details class="thinking">
     <summary>Thinking${sig}</summary>
-    <div class="think-body">${escapeHtml(text || "")}</div>
+    <div class="think-body">${escapeHtml(trimmed)}</div>
   </details>`;
 }
 
