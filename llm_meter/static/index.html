@@ -189,20 +189,31 @@
   .meter.cache  .value { color: var(--cache); }
 
   /* ---------- multiplier reference ---------- */
-  .multiplier-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  .multiplier-disclosure {
+    margin-top: 18px;
+    text-align: left;
+    border-top: 1px solid #ffcecb;
+    padding-top: 14px;
   }
-  .multiplier-card .ml-title {
+  .multiplier-disclosure > summary {
+    cursor: pointer;
+    list-style: none;
     font-size: 11px;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 12px;
+    text-align: center;
+    user-select: none;
   }
+  .multiplier-disclosure > summary::-webkit-details-marker { display: none; }
+  .multiplier-disclosure > summary::after {
+    content: " \25BE";
+    display: inline-block;
+    transition: transform 0.15s ease;
+  }
+  .multiplier-disclosure[open] > summary::after { transform: rotate(180deg); }
+  .multiplier-disclosure > summary:hover { color: var(--text); }
+  #multiplier-rows { margin-top: 12px; }
   .multiplier-row {
     display: flex;
     align-items: center;
@@ -210,7 +221,7 @@
     padding: 8px 0;
   }
   .multiplier-row + .multiplier-row {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid #ffcecb;
   }
   .multiplier-row .ml-from {
     font-size: 13px;
@@ -629,6 +640,10 @@
       <div class="cost-value" id="cost">$0.0000</div>
       <div class="cost-sub" id="cost-sub">&nbsp;</div>
       <div class="model-toggle toggle" id="model-toggle"></div>
+      <details class="multiplier-disclosure" id="multiplier-card">
+        <summary>Pricing reference</summary>
+        <div id="multiplier-rows"></div>
+      </details>
     </div>
 
     <section class="meters">
@@ -647,11 +662,6 @@
         <div class="value" id="m-cache">0</div>
         <div class="sub" id="s-cache">&nbsp;</div>
       </div>
-    </section>
-
-    <section class="multiplier-card" id="multiplier-card">
-      <div class="ml-title">Cost multipliers</div>
-      <div id="multiplier-rows"></div>
     </section>
 
     <section class="feed">
