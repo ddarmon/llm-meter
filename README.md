@@ -39,7 +39,7 @@ Open **http://localhost:8001/** in your browser to see the live dashboard.
 ## Installation
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/ddarmon/llm-meter.git
 cd llm-meter
 uv sync
 ```
