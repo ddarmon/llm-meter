@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Meter</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --panel-2: #f1f4f8;
+    --border: #d8dee4;
+    --border-strong: #afb8c1;
+    --text: #1a1f26;
+    --muted: #59636e;
+    --accent: #0969da;
+    /* Data colors — chosen for AA contrast on white */
+    --in: #0969da;          /* input / user */
+    --out: #bc4c00;         /* output / assistant (burnt orange) */
+    --cache: #1a7f37;       /* cached prefix (green) */
+    --cost: #cf222e;        /* cost / metered (red) */
+    --in-soft: #ddf4ff;
+    --out-soft: #fff1e5;
+    --cache-soft: #dafbe1;
+    --cost-soft: #ffebe9;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                 "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "tnum";
+  }
+  body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 24px 64px;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    width: 100%;
+    max-width: 980px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 16px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    flex: 1;
+  }
+  h1 .status { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+
+  .toggle {
+    display: inline-flex;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .toggle button {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .toggle button.active {
+    background: #ffffff;
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+
+  button.btn {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button.btn:hover { background: var(--panel-2); }
+
+  main {
+    width: 100%;
+    max-width: 980px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* ---------- cost card ---------- */
+  .cost-card {
+    background: linear-gradient(180deg, var(--cost-soft) 0%, #ffffff 100%);
+    border: 1px solid #ffcecb;
+    border-radius: 16px;
+    padding: 36px 32px;
+    text-align: center;
+    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  }
+  .cost-label {
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+  .cost-value {
+    font-size: 88px;
+    font-weight: 700;
+    color: var(--cost);
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .cost-sub {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .cost-sub strong { color: var(--text); font-weight: 600; }
+  .model-toggle {
+    margin-top: 18px;
+    display: inline-flex;
+    background: #ffffff;
+    border: 1px solid #ffcecb;
+  }
+  .model-toggle button {
+    padding: 7px 14px;
+    font-size: 12px;
+  }
+  .model-toggle button.active {
+    background: var(--cost-soft);
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--cost);
+  }
+
+  /* ---------- meters ---------- */
+  .meters {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .meter {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  }
+  .meter .label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .meter .value {
+    font-size: 38px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .meter .sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+    min-height: 16px;
+  }
+  .meter.input  .value { color: var(--in); }
+  .meter.output .value { color: var(--out); }
+  .meter.cache  .value { color: var(--cache); }
+
+  /* ---------- feed ---------- */
+  .feed {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  }
+  .feed-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    justify-content: space-between;
+  }
+  .feed-list { max-height: 460px; overflow-y: auto; }
+  .feed-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 130px 80px 80px 80px 100px;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .feed-row:hover { background: var(--panel-2); }
+  .feed-row:last-child { border-bottom: none; }
+  .feed-row.empty {
+    grid-template-columns: 1fr;
+    text-align: center;
+    color: var(--muted);
+    padding: 32px;
+    font-style: italic;
+    cursor: default;
+  }
+  .feed-row.empty:hover { background: transparent; }
+  .feed-row .time { color: var(--muted); font-size: 12px; }
+  .feed-row .model {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 12px;
+  }
+  .feed-row .replay-pill {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .feed-row .replay-pill .new-n { color: var(--in); font-weight: 600; }
+  .feed-row .num.in    { color: var(--in); text-align: right; }
+  .feed-row .num.out   { color: var(--out); text-align: right; }
+  .feed-row .num.cache { color: var(--cache); text-align: right; }
+  .feed-row .cost      { color: var(--cost); text-align: right; font-weight: 600; }
+  .feed-row.flash { animation: flash 0.8s ease-out; }
+  @keyframes flash {
+    0%   { background: var(--in-soft); }
+    100% { background: transparent; }
+  }
+
+  .footer {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: center;
+    margin-top: 8px;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .status-dot.live { background: var(--cache); box-shadow: 0 0 8px rgba(26, 127, 55, 0.5); }
+
+  /* ---------- modal ---------- */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(27, 31, 36, 0.45);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+    overflow-y: auto;
+    z-index: 100;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 100%;
+    max-width: 880px;
+    box-shadow: 0 30px 80px rgba(27, 31, 36, 0.25);
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    border-radius: 14px 14px 0 0;
+    z-index: 1;
+  }
+  .modal-title { font-size: 15px; font-weight: 600; }
+  .modal-title small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .modal-body { padding: 18px 22px 28px; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .summary-cell {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .summary-cell .l {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+  .summary-cell .v {
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .replay-banner {
+    background: var(--in-soft);
+    border: 1px solid #b6e3ff;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+  .replay-banner.first {
+    background: var(--cache-soft);
+    border-color: #aceebb;
+  }
+  .replay-banner strong { color: var(--in); }
+  .replay-banner.first strong { color: var(--cache); }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 11px;
+    color: var(--muted);
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    align-items: center;
+  }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .swatch {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    background: var(--panel);
+  }
+  .legend .swatch.input-thin { border: 1px solid var(--in); }
+  .legend .swatch.input-thick { border: 3px solid var(--in); }
+  .legend .swatch.output-thick { border: 3px solid var(--out); }
+  .legend .swatch.cache { box-shadow: inset 5px 0 0 var(--cache); border: 1px solid var(--border); }
+
+  .section-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 18px 0 8px;
+  }
+
+  details.system {
+    background: var(--panel);
+    border: 1px solid var(--in);
+    border-width: 1px;
+    border-radius: 10px;
+    padding: 0;
+    margin-bottom: 8px;
+  }
+  details.system.cached { box-shadow: inset 6px 0 0 var(--cache); }
+  details.system.cached > summary,
+  details.system.cached > .system-body { padding-left: 22px; }
+  details.system > summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--muted);
+    list-style: none;
+  }
+  details.system > summary::-webkit-details-marker { display: none; }
+  details.system > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 8px;
+    transition: transform 0.15s;
+  }
+  details.system[open] > summary::before { transform: rotate(90deg); }
+  details.system > .system-body {
+    padding: 0 14px 14px;
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  /* Every message in the messages[] array is INPUT this turn (regardless of
+     its original role). The assistant's response is OUTPUT this turn. So the
+     border color here reflects the *role in this request*, not the conversation
+     role — that's the pedagogical point. */
+  .turn {
+    border-style: solid;
+    border-color: var(--in);
+    border-width: 1px;          /* default: thin = replayed */
+    border-radius: 10px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    background: var(--panel);
+    position: relative;
+  }
+  .turn.replayed { background: #fbfcfd; }
+  .turn.new      { border-width: 3px; }   /* thick = new this turn */
+  .turn.output   { border-color: var(--out); }
+  .turn.cached   { box-shadow: inset 6px 0 0 var(--cache); }
+  .turn.cached .turn-head,
+  .turn.cached .turn-body { padding-left: 22px; }
+
+  .turn-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .turn-head .role { color: var(--text); font-weight: 600; }
+  .turn-head .role.user, .turn-head .role.tool { color: var(--in); }
+  .turn-head .role.assistant { color: var(--out); }
+  .turn-head .badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    margin-left: 8px;
+    letter-spacing: 0.05em;
+  }
+  .turn-head .badge.new { background: var(--in-soft); color: var(--in); border: 1px solid #b6e3ff; }
+  .turn-head .badge.new.output { background: var(--out-soft); color: var(--out); border-color: #fdaa6b; }
+  .turn-head .badge.replayed { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+  .turn-head .badge.cached { background: var(--cache-soft); color: var(--cache); border: 1px solid #aceebb; }
+
+  .turn-body {
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow-y: auto;
+    color: var(--text);
+  }
+  .turn-body .block { margin-bottom: 10px; }
+  .turn-body .block:last-child { margin-bottom: 0; }
+  .turn-body .block-label {
+    display: inline-block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .turn-body .tool-use, .turn-body .tool-result {
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+  }
+  .turn-body .tool-use .block-label { color: var(--out); }
+  .turn-body .tool-result .block-label { color: var(--cache); }
+  .turn-body pre.json {
+    background: #f6f8fa;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text);
+    overflow-x: auto;
+    margin: 4px 0 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>LLM Meter <span class="status"><span class="status-dot" id="dot"></span><span id="status-text">connecting&hellip;</span></span></h1>
+    <div class="toggle" id="mode-toggle">
+      <button data-mode="cumulative" class="active">Cumulative</button>
+      <button data-mode="turn">Per-turn</button>
+    </div>
+    <button class="btn" id="reset">Reset</button>
+  </header>
+
+  <main>
+    <div class="cost-card">
+      <div class="cost-label" id="cost-mode-label">Cumulative cost</div>
+      <div class="cost-value" id="cost">$0.0000</div>
+      <div class="cost-sub" id="cost-sub">&nbsp;</div>
+      <div class="model-toggle toggle" id="model-toggle"></div>
+    </div>
+
+    <section class="meters">
+      <div class="meter input">
+        <div class="label" id="l-input">Input tokens (cumulative)</div>
+        <div class="value" id="m-input">0</div>
+        <div class="sub" id="s-input">&nbsp;</div>
+      </div>
+      <div class="meter output">
+        <div class="label" id="l-output">Output tokens (cumulative)</div>
+        <div class="value" id="m-output">0</div>
+        <div class="sub" id="s-output">&nbsp;</div>
+      </div>
+      <div class="meter cache">
+        <div class="label" id="l-cache">Cache reads (cumulative)</div>
+        <div class="value" id="m-cache">0</div>
+        <div class="sub" id="s-cache">&nbsp;</div>
+      </div>
+    </section>
+
+    <section class="feed">
+      <div class="feed-header">
+        <span>Recent requests &mdash; click any row to inspect the transcript</span>
+        <span id="req-count">0</span>
+      </div>
+      <div class="feed-list" id="feed">
+        <div class="feed-row empty">No requests yet &mdash; start your coding agent.</div>
+      </div>
+    </section>
+
+    <div class="footer">Proxying to upstream backend &middot; request bodies kept in memory</div>
+  </main>
+
+  <div class="modal-backdrop" id="modal-bg">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-title">Request</div>
+        <button class="btn" id="modal-close">Close</button>
+      </div>
+      <div class="modal-body" id="modal-body">Loading&hellip;</div>
+    </div>
+  </div>
+
+<script>
+const fmtN = new Intl.NumberFormat("en-US");
+const fmtCost = (n) => "$" + (n || 0).toLocaleString("en-US", {
+  minimumFractionDigits: 4, maximumFractionDigits: 4,
+});
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("en-US", { hour12: false });
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, c => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+));
+
+const el = {
+  cost: document.getElementById("cost"),
+  costSub: document.getElementById("cost-sub"),
+  costModeLabel: document.getElementById("cost-mode-label"),
+  input: document.getElementById("m-input"),
+  output: document.getElementById("m-output"),
+  cache: document.getElementById("m-cache"),
+  lInput: document.getElementById("l-input"),
+  lOutput: document.getElementById("l-output"),
+  lCache: document.getElementById("l-cache"),
+  sInput: document.getElementById("s-input"),
+  sOutput: document.getElementById("s-output"),
+  sCache: document.getElementById("s-cache"),
+  feed: document.getElementById("feed"),
+  reqCount: document.getElementById("req-count"),
+  statusText: document.getElementById("status-text"),
+  dot: document.getElementById("dot"),
+  reset: document.getElementById("reset"),
+  toggle: document.getElementById("mode-toggle"),
+  modelToggle: document.getElementById("model-toggle"),
+  modalBg: document.getElementById("modal-bg"),
+  modalTitle: document.getElementById("modal-title"),
+  modalBody: document.getElementById("modal-body"),
+  modalClose: document.getElementById("modal-close"),
+};
+
+let mode = "cumulative"; // or "turn"
+let pricingModel = "opus_47"; // selected comparison model
+let pricingTable = {};        // populated from snapshot
+let lastSeenId = 0;
+let lastSnapshot = null;
+
+const costOf = (entry) => (entry && entry.costs && entry.costs[pricingModel]) || 0;
+const fmtRate = (n) => n >= 1 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+function ratesLine() {
+  const p = pricingTable[pricingModel];
+  if (!p) return " ";
+  return `${fmtRate(p.input)} / ${fmtRate(p.output)} per Mtok &middot; cache reads ${fmtRate(p.cache_read)} / Mtok`;
+}
+function modelLabel() {
+  return (pricingTable[pricingModel] && pricingTable[pricingModel].label) || pricingModel;
+}
+
+function renderModelToggle() {
+  const ids = Object.keys(pricingTable);
+  if (!ids.length) return;
+  // Only rebuild if structure changed
+  const desired = ids.join(",");
+  if (el.modelToggle.dataset.built === desired) {
+    for (const b of el.modelToggle.querySelectorAll("button")) {
+      b.classList.toggle("active", b.dataset.model === pricingModel);
+    }
+    return;
+  }
+  el.modelToggle.innerHTML = ids.map(id => {
+    const active = id === pricingModel ? " active" : "";
+    return `<button data-model="${id}" class="${active}">${escapeHtml(pricingTable[id].label)}</button>`;
+  }).join("");
+  el.modelToggle.dataset.built = desired;
+}
+
+function setLive(on) {
+  el.dot.classList.toggle("live", on);
+  el.statusText.textContent = on ? "live" : "disconnected";
+}
+
+function renderHeadline(snap) {
+  const t = snap.totals;
+  const recent = snap.recent || [];
+  const latest = recent[0];
+
+  if (mode === "cumulative") {
+    el.costModeLabel.innerHTML = `Cumulative cost &mdash; if billed at ${escapeHtml(modelLabel())} rates`;
+    el.cost.textContent = fmtCost(t.costs && t.costs[pricingModel]);
+    el.costSub.innerHTML = ratesLine();
+
+    el.lInput.textContent = "Input tokens (cumulative)";
+    el.lOutput.textContent = "Output tokens (cumulative)";
+    el.lCache.textContent = "Cache reads (cumulative)";
+    el.input.textContent = fmtN.format(t.input_tokens);
+    el.output.textContent = fmtN.format(t.output_tokens);
+    el.cache.textContent = fmtN.format(t.cache_read_tokens);
+
+    const totalIn = t.input_tokens + t.cache_read_tokens;
+    el.sCache.textContent = totalIn > 0
+      ? `${(t.cache_read_tokens / totalIn * 100).toFixed(1)}% of prompt cached`
+      : " ";
+    el.sInput.textContent = t.cache_creation_tokens > 0
+      ? `+${fmtN.format(t.cache_creation_tokens)} cache writes`
+      : " ";
+    el.sOutput.textContent = " ";
+  } else {
+    el.costModeLabel.innerHTML = `Per-turn cost &mdash; ${escapeHtml(modelLabel())} rates`;
+    if (!latest) {
+      el.cost.textContent = "$0.0000";
+      el.costSub.innerHTML = ratesLine();
+      ["input", "output", "cache"].forEach(k => { el[k].textContent = "0"; });
+      el.sInput.textContent = el.sOutput.textContent = el.sCache.textContent = " ";
+      return;
+    }
+    el.cost.textContent = fmtCost(costOf(latest));
+
+    const r = latest.replay || {};
+    if (r.first_request) {
+      el.costSub.innerHTML = `<strong>First turn</strong> &middot; ${fmtN.format(latest.message_count)} messages`;
+    } else {
+      el.costSub.innerHTML = `Turn includes <strong>${fmtN.format(r.replayed_count)}</strong> replayed messages` +
+        (r.new_count > 0 ? ` and <strong>${fmtN.format(r.new_count)}</strong> new` : "");
+    }
+
+    el.lInput.textContent = "Input tokens (this turn)";
+    el.lOutput.textContent = "Output tokens (this turn)";
+    el.lCache.textContent = "Cache reads (this turn)";
+    el.input.textContent = fmtN.format(latest.input_tokens);
+    el.output.textContent = fmtN.format(latest.output_tokens);
+    el.cache.textContent = fmtN.format(latest.cache_read_tokens);
+
+    const promptSize = latest.input_tokens + latest.cache_read_tokens;
+    el.sInput.textContent = promptSize > 0
+      ? `${fmtN.format(promptSize)} total prompt tokens`
+      : " ";
+    el.sOutput.textContent = `model: ${latest.model || "?"}`;
+    el.sCache.textContent = promptSize > 0 && latest.cache_read_tokens > 0
+      ? `${(latest.cache_read_tokens / promptSize * 100).toFixed(1)}% cached`
+      : " ";
+  }
+}
+
+function renderFeed(snap) {
+  const recent = snap.recent || [];
+  el.reqCount.textContent = recent.length === 0 ? "0" : `${recent.length} shown`;
+
+  if (recent.length === 0) {
+    el.feed.innerHTML = '<div class="feed-row empty">No requests yet &mdash; start your coding agent.</div>';
+    lastSeenId = 0;
+    return;
+  }
+
+  const newestId = recent[0].id;
+  const html = recent.map((r) => {
+    const flash = r.id > lastSeenId ? " flash" : "";
+    const rep = r.replay || {};
+    let pill;
+    if (rep.first_request) {
+      pill = `<span class="replay-pill"><span class="new-n">${fmtN.format(rep.new_count || r.message_count || 0)} new</span></span>`;
+    } else if ((rep.new_count || 0) === 0 && (rep.replayed_count || 0) === 0) {
+      pill = `<span class="replay-pill">&mdash;</span>`;
+    } else {
+      pill = `<span class="replay-pill"><span class="new-n">+${fmtN.format(rep.new_count || 0)}</span> &middot; ${fmtN.format(rep.replayed_count || 0)} replayed</span>`;
+    }
+    return `<div class="feed-row${flash}" data-id="${r.id}">
+      <span class="time">${fmtTime(r.ts)}</span>
+      <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
+      ${pill}
+      <span class="num in">${fmtN.format(r.input_tokens)}</span>
+      <span class="num out">${fmtN.format(r.output_tokens)}</span>
+      <span class="num cache">${fmtN.format(r.cache_read_tokens)}</span>
+      <span class="cost">${fmtCost(costOf(r))}</span>
+    </div>`;
+  }).join("");
+  el.feed.innerHTML = html;
+  lastSeenId = newestId;
+}
+
+function render(snap) {
+  lastSnapshot = snap;
+  if (snap.pricing) {
+    pricingTable = snap.pricing;
+    if (!(pricingModel in pricingTable)) {
+      pricingModel = Object.keys(pricingTable)[0];
+    }
+    renderModelToggle();
+  }
+  renderHeadline(snap);
+  renderFeed(snap);
+}
+
+// ---------- modal ----------
+
+function systemAsText(sys) {
+  if (sys == null) return "";
+  if (typeof sys === "string") return sys;
+  // Anthropic system can be array of { type: "text", text, ...cache_control }
+  if (Array.isArray(sys)) {
+    return sys.map(b => (typeof b === "string" ? b : (b?.text ?? JSON.stringify(b)))).join("\n\n");
+  }
+  return JSON.stringify(sys, null, 2);
+}
+
+function renderContentBlocks(content) {
+  // Anthropic-style content array OR a plain string OR null
+  if (content == null) return "";
+  if (typeof content === "string") {
+    return `<div class="block">${escapeHtml(content)}</div>`;
+  }
+  if (!Array.isArray(content)) {
+    return `<pre class="json">${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  }
+  return content.map(block => {
+    if (!block || typeof block !== "object") {
+      return `<div class="block">${escapeHtml(String(block))}</div>`;
+    }
+    const t = block.type;
+    if (t === "text") {
+      return `<div class="block">${escapeHtml(block.text || "")}</div>`;
+    }
+    if (t === "tool_use") {
+      const args = block.input != null ? JSON.stringify(block.input, null, 2) : "";
+      return `<div class="block tool-use">
+        <span class="block-label">tool_use &middot; ${escapeHtml(block.name || "")}</span>
+        <pre class="json">${escapeHtml(args)}</pre>
+      </div>`;
+    }
+    if (t === "tool_result") {
+      const c = block.content;
+      const body = (typeof c === "string") ? escapeHtml(c) : renderContentBlocks(c);
+      return `<div class="block tool-result">
+        <span class="block-label">tool_result${block.is_error ? " · error" : ""}</span>
+        ${typeof c === "string" ? `<div>${body}</div>` : body}
+      </div>`;
+    }
+    if (t === "image") {
+      return `<div class="block"><span class="block-label">image</span></div>`;
+    }
+    return `<pre class="json">${escapeHtml(JSON.stringify(block, null, 2))}</pre>`;
+  }).join("");
+}
+
+function renderOpenAIContent(msg) {
+  // OpenAI assistant: { content: string|null, tool_calls: [{id, type, function:{name, arguments}}] }
+  // OpenAI user/tool: { content: string }
+  let html = "";
+  if (msg.content != null) {
+    if (typeof msg.content === "string") {
+      html += `<div class="block">${escapeHtml(msg.content)}</div>`;
+    } else {
+      html += renderContentBlocks(msg.content);
+    }
+  }
+  if (Array.isArray(msg.tool_calls)) {
+    for (const tc of msg.tool_calls) {
+      const name = tc?.function?.name || "";
+      let args = tc?.function?.arguments || "";
+      try { args = JSON.stringify(JSON.parse(args), null, 2); } catch (e) {}
+      html += `<div class="block tool-use">
+        <span class="block-label">tool_call &middot; ${escapeHtml(name)}</span>
+        <pre class="json">${escapeHtml(args)}</pre>
+      </div>`;
+    }
+  }
+  if (msg.role === "tool") {
+    html += `<div class="block tool-result">
+      <span class="block-label">tool_result &middot; id ${escapeHtml(msg.tool_call_id || "")}</span>
+      <div>${escapeHtml(typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content, null, 2))}</div>
+    </div>`;
+  }
+  return html || `<div class="block" style="color: var(--muted)">(empty)</div>`;
+}
+
+function renderTurn(msg, isNew, isCached) {
+  // Every message in messages[] is INPUT this turn — the original conversational
+  // role (user/assistant/tool) is shown as a label, but the border color reflects
+  // the role *in this request*: input.
+  const role = (msg.role || "?").toLowerCase();
+  const classes = ["turn"];
+  classes.push(isNew ? "new" : "replayed");
+  if (isCached) classes.push("cached");
+  const newBadge = isNew
+    ? `<span class="badge new">NEW THIS TURN</span>`
+    : `<span class="badge replayed">replayed as input</span>`;
+  const cacheBadge = isCached
+    ? `<span class="badge cached">cached</span>`
+    : "";
+  const fmt = (lastTranscript?.request?.format) || "anthropic";
+  const body = (fmt === "openai")
+    ? renderOpenAIContent(msg)
+    : renderContentBlocks(msg.content);
+  return `<div class="${classes.join(" ")}">
+    <div class="turn-head">
+      <span><span class="role ${role}">${escapeHtml(role)}</span>${newBadge}${cacheBadge}</span>
+    </div>
+    <div class="turn-body">${body}</div>
+  </div>`;
+}
+
+function renderResponseTurn(resp, fmt) {
+  // The assistant's response is OUTPUT this turn — amber border, thick (always new).
+  const stop = resp.stop_reason || resp.finish_reason;
+  const stopBadge = stop ? `<span class="badge replayed">stop: ${escapeHtml(stop)}</span>` : "";
+  const body = (fmt === "openai")
+    ? renderOpenAIContent(resp)
+    : renderContentBlocks(resp.content);
+  return `<div class="turn output new">
+    <div class="turn-head">
+      <span>
+        <span class="role assistant">assistant</span>
+        <span class="badge new output">OUTPUT THIS TURN</span>
+        ${stopBadge}
+      </span>
+    </div>
+    <div class="turn-body">${body}</div>
+  </div>`;
+}
+
+function computeCacheState(req) {
+  // Anthropic prompt-cache breakpoints are explicit `cache_control` markers
+  // on individual content blocks. Everything from the start of the request up
+  // to (and including) the message containing the *last* breakpoint is in the
+  // cached prefix on subsequent requests.
+  // OpenAI has no equivalent marker — caching is implicit — so this returns
+  // an empty set there and we fall back to just the response-reported count.
+  const fmt = req?.format || "anthropic";
+  const result = { systemCached: false, cachedSet: new Set(), supported: fmt === "anthropic" };
+  if (!result.supported) return result;
+
+  const hasMarker = (block) => block && typeof block === "object" && block.cache_control;
+  const blocksOf = (content) => {
+    if (Array.isArray(content)) return content;
+    if (content && typeof content === "object") return [content];
+    return [];
+  };
+
+  // System prompt
+  const sys = req.system;
+  let sysHasMarker = false;
+  if (sys != null) {
+    const sysBlocks = Array.isArray(sys) ? sys : (typeof sys === "object" ? [sys] : []);
+    sysHasMarker = sysBlocks.some(hasMarker);
+  }
+
+  // Messages: find index of last message with a cache_control marker
+  const messages = req.messages || [];
+  let lastIdx = -1;
+  messages.forEach((m, i) => {
+    if (blocksOf(m.content).some(hasMarker)) lastIdx = i;
+  });
+
+  // If any cache breakpoint exists (system or any message), the system prompt
+  // is part of the cached prefix.
+  if (sysHasMarker || lastIdx >= 0) result.systemCached = true;
+  for (let i = 0; i <= lastIdx; i++) result.cachedSet.add(i);
+  return result;
+}
+
+let lastTranscript = null;
+
+function renderTranscript(t) {
+  lastTranscript = t;
+  const s = t.summary || {};
+  const req = t.request || {};
+  const resp = t.response;
+  const replay = t.replay || {};
+  const newSet = new Set(replay.new_indices || []);
+  const messages = req.messages || [];
+  const cache = computeCacheState(req);
+
+  el.modalTitle.innerHTML = `Request #${s.id} <small>${escapeHtml(s.model || s.path || "")} &middot; ${fmtTime(s.ts)}</small>`;
+
+  const summaryGrid = `
+    <div class="summary-grid">
+      <div class="summary-cell"><div class="l">Input</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
+    </div>`;
+
+  let banner;
+  if (replay.first_request) {
+    banner = `<div class="replay-banner first">
+      <strong>First turn of the conversation.</strong> All ${fmtN.format(messages.length)} message(s) below are new.
+      Subsequent turns will replay this entire array as input each time.
+    </div>`;
+  } else {
+    banner = `<div class="replay-banner">
+      This request sent <strong>${fmtN.format(messages.length)}</strong> messages to the model as input:
+      <strong>${fmtN.format(replay.new_count || 0)} new</strong> this turn,
+      ${fmtN.format(replay.replayed_count || 0)} replayed verbatim from prior turns.
+      Every replayed message is re-tokenized and counted as input again.
+    </div>`;
+  }
+
+  const legend = `
+    <div class="legend">
+      <span class="item"><span class="swatch input-thick"></span>new input this turn</span>
+      <span class="item"><span class="swatch input-thin"></span>replayed input</span>
+      <span class="item"><span class="swatch output-thick"></span>output this turn</span>
+      ${cache.supported ? `<span class="item"><span class="swatch cache"></span>part of cached prefix</span>` : ""}
+    </div>`;
+
+  const sysCachedClass = cache.systemCached ? " cached" : "";
+  const sysCachedBadge = cache.systemCached
+    ? ` <span class="badge cached" style="font-size:10px;padding:2px 7px;border-radius:999px;background:var(--cache-soft);color:var(--cache);border:1px solid #aceebb;margin-left:6px;">cached</span>`
+    : "";
+  const sysHtml = req.system != null
+    ? `<details class="system${sysCachedClass}">
+        <summary>System prompt &middot; ${fmtN.format(systemAsText(req.system).length)} chars (always replayed as input)${sysCachedBadge}</summary>
+        <div class="system-body">${escapeHtml(systemAsText(req.system))}</div>
+      </details>`
+    : "";
+
+  const turnsHtml = messages
+    .map((m, i) => renderTurn(m, newSet.has(i), cache.cachedSet.has(i)))
+    .join("");
+
+  const respHtml = resp
+    ? `<div class="section-label">Assistant response (output this turn)</div>
+       ${renderResponseTurn(resp, req.format)}`
+    : "";
+
+  el.modalBody.innerHTML = `
+    ${summaryGrid}
+    ${banner}
+    ${legend}
+    ${sysHtml ? `<div class="section-label">System</div>${sysHtml}` : ""}
+    <div class="section-label">Messages sent as input (${fmtN.format(messages.length)})</div>
+    ${turnsHtml || '<div style="color:var(--muted); font-style:italic; padding:8px 0;">No messages</div>'}
+    ${respHtml}
+  `;
+}
+
+async function openRequest(id) {
+  el.modalBody.innerHTML = "Loading…";
+  el.modalTitle.textContent = `Request #${id}`;
+  el.modalBg.classList.add("open");
+  try {
+    const r = await fetch(`/api/request/${id}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    renderTranscript(data);
+  } catch (e) {
+    el.modalBody.innerHTML = `<div style="color: var(--cost)">Failed to load: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeModal() { el.modalBg.classList.remove("open"); }
+
+// ---------- events ----------
+
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onopen = () => setLive(true);
+  es.onerror = () => {
+    setLive(false);
+    es.close();
+    setTimeout(connect, 1500);
+  };
+  es.onmessage = (ev) => {
+    try { render(JSON.parse(ev.data)); } catch (e) {}
+  };
+}
+
+el.reset.addEventListener("click", async () => {
+  if (!confirm("Reset all counters and stored transcripts?")) return;
+  await fetch("/api/reset", { method: "POST" });
+  lastSeenId = 0;
+});
+
+el.toggle.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (!btn) return;
+  mode = btn.dataset.mode;
+  for (const b of el.toggle.querySelectorAll("button")) {
+    b.classList.toggle("active", b === btn);
+  }
+  if (lastSnapshot) renderHeadline(lastSnapshot);
+});
+
+el.modelToggle.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-model]");
+  if (!btn) return;
+  pricingModel = btn.dataset.model;
+  for (const b of el.modelToggle.querySelectorAll("button")) {
+    b.classList.toggle("active", b === btn);
+  }
+  if (lastSnapshot) {
+    renderHeadline(lastSnapshot);
+    renderFeed(lastSnapshot);
+  }
+  // Refresh modal if open
+  if (el.modalBg.classList.contains("open") && lastTranscript) {
+    renderTranscript(lastTranscript);
+  }
+});
+
+el.feed.addEventListener("click", (e) => {
+  const row = e.target.closest(".feed-row[data-id]");
+  if (!row) return;
+  openRequest(parseInt(row.dataset.id, 10));
+});
+
+el.modalClose.addEventListener("click", closeModal);
+el.modalBg.addEventListener("click", (e) => { if (e.target === el.modalBg) closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+connect();
+</script>
+</body>
+</html>
