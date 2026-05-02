@@ -425,6 +425,9 @@
     border-left: 2px solid #d8b9ff;
     margin: 0 0 4px 0;
     padding: 0;
+    /* `.turn-body` sets pre-wrap; without this, the newlines between
+       <summary> and <div class="think-body"> render as blank rows. */
+    white-space: normal;
   }
   details.thinking > summary {
     cursor: pointer;
