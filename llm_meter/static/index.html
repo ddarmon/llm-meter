@@ -488,7 +488,7 @@
 
   .summary-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 10px;
     margin-bottom: 18px;
   }
@@ -1358,11 +1358,16 @@ function renderTranscript(t) {
 
   el.modalTitle.innerHTML = `Request #${s.id} <small>${escapeHtml(s.model || s.path || "")} &middot; ${fmtTime(s.ts)}</small>`;
 
+  const promptTotal = (s.input_tokens || 0) + (s.cache_read_tokens || 0) + (s.cache_creation_tokens || 0);
+  const cwriteSub = (s.cache_creation_tokens || 0) > 0
+    ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; 1.25× input rate</div>`
+    : "";
   const summaryGrid = `
     <div class="summary-grid">
-      <div class="summary-cell"><div class="l">Input</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Input (uncached)</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div>${promptTotal > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">of ${fmtN.format(promptTotal)} prompt tokens</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
+      <div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${cwriteSub}</div>
       <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
     </div>`;
 
