@@ -33,10 +33,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 PRICING: dict[str, dict[str, Any]] = {
     "opus_47": {
         "label": "Claude Opus 4.7",
-        "input": 15.00,
-        "output": 75.00,
-        "cache_write_5m": 18.75,  # 1.25x input
-        "cache_read": 1.50,  # 0.10x input
+        "input": 5.00,
+        "output": 25.00,
+        "cache_write_5m": 6.25,  # 1.25x input
+        "cache_read": 0.50,  # 0.10x input
     },
     "sonnet_46": {
         "label": "Claude Sonnet 4.6",
