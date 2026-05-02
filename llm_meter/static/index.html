@@ -18,12 +18,12 @@
     --in: #0969da;          /* input / user */
     --out: #bc4c00;         /* output / assistant (burnt orange) */
     --cache: #1a7f37;       /* cached prefix read (green) */
-    --cwrite: #9a6700;      /* cache write (amber -- 1.25x input cost) */
+    --cwrite: #0a7383;      /* cache write (teal -- 1.25x input cost) */
     --cost: #cf222e;        /* cost / metered (red) */
     --in-soft: #ddf4ff;
     --out-soft: #fff1e5;
     --cache-soft: #dafbe1;
-    --cwrite-soft: #fff8c5;
+    --cwrite-soft: #cff5f6;
     --cost-soft: #ffebe9;
     --think: #8250df;
     --think-soft: #fbefff;
@@ -757,16 +757,6 @@
     </div>
 
     <section class="meters">
-      <div class="meter input">
-        <div class="label" id="l-input">Input tokens (cumulative)</div>
-        <div class="value" id="m-input">0</div>
-        <div class="sub" id="s-input">&nbsp;</div>
-      </div>
-      <div class="meter output">
-        <div class="label" id="l-output">Output tokens (cumulative)</div>
-        <div class="value" id="m-output">0</div>
-        <div class="sub" id="s-output">&nbsp;</div>
-      </div>
       <div class="meter cache">
         <div class="label" id="l-cache">Cache reads (cumulative)</div>
         <div class="value" id="m-cache">0</div>
@@ -776,6 +766,16 @@
         <div class="label" id="l-cwrite">Cache writes (cumulative)</div>
         <div class="value" id="m-cwrite">0</div>
         <div class="sub" id="s-cwrite">&nbsp;</div>
+      </div>
+      <div class="meter input">
+        <div class="label" id="l-input">Input tokens (cumulative)</div>
+        <div class="value" id="m-input">0</div>
+        <div class="sub" id="s-input">&nbsp;</div>
+      </div>
+      <div class="meter output">
+        <div class="label" id="l-output">Output tokens (cumulative)</div>
+        <div class="value" id="m-output">0</div>
+        <div class="sub" id="s-output">&nbsp;</div>
       </div>
     </section>
 
@@ -983,10 +983,10 @@ function renderFeed(snap) {
       <span class="time">${fmtTime(r.ts)}</span>
       <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
       ${pill}
-      <span class="num in">${fmtN.format(r.input_tokens)}</span>
-      <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
-      <span class="num cache">${fmtN.format(r.cache_read_tokens)}</span>
+      <span class="num cache" title="cache reads (cheapest)">${fmtN.format(r.cache_read_tokens)}</span>
       <span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>
+      <span class="num in" title="uncached input">${fmtN.format(r.input_tokens)}</span>
+      <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
       <span class="cost">${fmtCost(costOf(r))}</span>
     </div>`;
   }).join("");
@@ -1364,10 +1364,10 @@ function renderTranscript(t) {
     : "";
   const summaryGrid = `
     <div class="summary-grid">
-      <div class="summary-cell"><div class="l">Input (uncached)</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div>${promptTotal > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">of ${fmtN.format(promptTotal)} prompt tokens</div>` : ""}</div>
-      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
       <div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${cwriteSub}</div>
+      <div class="summary-cell"><div class="l">Input (uncached)</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div>${promptTotal > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">of ${fmtN.format(promptTotal)} prompt tokens</div>` : ""}</div>
+      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
     </div>`;
 
