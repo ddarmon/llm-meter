@@ -255,6 +255,8 @@ def parse_full_response_content(payload: dict[str, Any], fmt: str) -> Optional[d
 class StreamAccumulator:
     """Parse SSE events from upstream and reconstruct usage + response content."""
 
+    MAX_RAW_BYTES = 2_000_000
+
     def __init__(self, fmt: str) -> None:
         self.fmt = fmt
         self.usage = Usage()
@@ -267,6 +269,23 @@ class StreamAccumulator:
         self._oai_reasoning_text = ""
         self._oai_tool_calls: dict[int, dict[str, Any]] = {}
         self._oai_finish_reason: Optional[str] = None
+        # Wire capture (for the back-end view tab)
+        self.raw_chunks: list[str] = []
+        self.raw_size: int = 0
+        self.events: list[dict[str, Any]] = []
+        self.truncated: bool = False
+
+    def feed_raw(self, text: str) -> None:
+        """Append a decoded chunk of the SSE byte stream, with a soft size cap."""
+        if not text or self.truncated:
+            return
+        self.raw_chunks.append(text)
+        self.raw_size += len(text)
+        if self.raw_size > self.MAX_RAW_BYTES:
+            self.truncated = True
+            self.raw_chunks.append(
+                f"\n[...truncated by llm-meter at {self.MAX_RAW_BYTES} bytes...]\n"
+            )
 
     def feed_line(self, line: str) -> None:
         if not line.startswith("data:"):
@@ -278,6 +297,7 @@ class StreamAccumulator:
             evt = json.loads(body)
         except json.JSONDecodeError:
             return
+        self.events.append(evt)
         if self.fmt == "anthropic":
             self._feed_anthropic(evt)
         elif self.fmt == "openai":
@@ -463,6 +483,10 @@ class Stats:
         duration_ms: int,
         request_payload: Optional[dict[str, Any]],
         response_payload: Optional[dict[str, Any]],
+        raw_request: Optional[str] = None,
+        raw_response_body: Optional[str] = None,
+        raw_response_stream: Optional[dict[str, Any]] = None,
+        truncated: bool = False,
     ) -> Optional[int]:
         # Skip empty proxy hits (health checks etc.) but keep real LLM
         # requests even if usage parsing failed (we still want the transcript).
@@ -507,6 +531,12 @@ class Stats:
             "request": request_payload,
             "response": response_payload,
             "replay": replay,
+            "wire": {
+                "request_body": raw_request,
+                "response_body": raw_response_body,
+                "response_stream": raw_response_stream,
+                "truncated": truncated,
+            },
         }
         # Trim stored transcripts to match the deque
         if self.requests.maxlen is not None and len(self.transcripts) > self.requests.maxlen:
@@ -644,6 +674,7 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
         headers = _filter_request_headers(request.headers)
         fmt = detect_format(full_path)
         request_payload = parse_request(body, fmt) if body and fmt else None
+        raw_request_text = body.decode("utf-8", errors="replace") if body else ""
         model = (request_payload or {}).get("model")
         started = time.perf_counter()
 
@@ -668,7 +699,9 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
                     async for chunk in upstream_resp.aiter_raw():
                         if chunk:
                             try:
-                                buf += chunk.decode("utf-8", errors="ignore")
+                                decoded = chunk.decode("utf-8", errors="replace")
+                                acc.feed_raw(decoded)
+                                buf += decoded
                                 while "\n" in buf:
                                     line, buf = buf.split("\n", 1)
                                     acc.feed_line(line.rstrip("\r"))
@@ -685,6 +718,13 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
                         duration_ms=duration_ms,
                         request_payload=request_payload,
                         response_payload=acc.to_response(),
+                        raw_request=raw_request_text,
+                        raw_response_body=None,
+                        raw_response_stream={
+                            "raw": "".join(acc.raw_chunks),
+                            "events": acc.events,
+                        },
+                        truncated=acc.truncated,
                     )
 
             return StreamingResponse(
@@ -709,6 +749,15 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
                         response_payload = parse_full_response_content(payload, fmt)
             except json.JSONDecodeError:
                 pass
+        raw_response_text = raw.decode("utf-8", errors="replace") if raw else ""
+        if len(raw_response_text) > StreamAccumulator.MAX_RAW_BYTES:
+            raw_response_text = (
+                raw_response_text[: StreamAccumulator.MAX_RAW_BYTES]
+                + f"\n[...truncated by llm-meter at {StreamAccumulator.MAX_RAW_BYTES} bytes...]\n"
+            )
+            non_sse_truncated = True
+        else:
+            non_sse_truncated = False
         stats.record(
             path="/" + full_path,
             model=model,
@@ -716,6 +765,10 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
             duration_ms=duration_ms,
             request_payload=request_payload,
             response_payload=response_payload,
+            raw_request=raw_request_text,
+            raw_response_body=raw_response_text,
+            raw_response_stream=None,
+            truncated=non_sse_truncated,
         )
 
         return Response(
