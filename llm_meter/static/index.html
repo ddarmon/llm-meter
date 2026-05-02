@@ -186,6 +186,61 @@
   .meter.output .value { color: var(--out); }
   .meter.cache  .value { color: var(--cache); }
 
+  /* ---------- multiplier reference ---------- */
+  .multiplier-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  }
+  .multiplier-card .ml-title {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+  .multiplier-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .multiplier-row + .multiplier-row {
+    border-top: 1px solid var(--border);
+  }
+  .multiplier-row .ml-from {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 120px;
+  }
+  .multiplier-row .ml-arrow {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .multiplier-row .ml-to {
+    font-size: 13px;
+    color: var(--text);
+    min-width: 120px;
+  }
+  .multiplier-row .ml-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .ml-pill {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .ml-pill.input { background: var(--in-soft); color: var(--in); }
+  .ml-pill.output { background: var(--out-soft); color: var(--out); }
+
   /* ---------- feed ---------- */
   .feed {
     background: var(--panel);
@@ -541,6 +596,11 @@
       </div>
     </section>
 
+    <section class="multiplier-card" id="multiplier-card">
+      <div class="ml-title">Cost multipliers</div>
+      <div id="multiplier-rows"></div>
+    </section>
+
     <section class="feed">
       <div class="feed-header">
         <span>Recent requests &mdash; click any row to inspect the transcript</span>
@@ -738,6 +798,24 @@ function renderFeed(snap) {
   lastSeenId = newestId;
 }
 
+function renderMultipliers(snap) {
+  const m = snap.multipliers || [];
+  const el = document.getElementById("multiplier-rows");
+  if (!m.length) { el.innerHTML = ""; return; }
+  el.innerHTML = m.map((r) => `
+    <div class="multiplier-row">
+      <span class="ml-from">${escapeHtml(r.from_label)}</span>
+      <span class="ml-arrow">costs</span>
+      <span class="ml-pills">
+        <span class="ml-pill input">${r.input_mult}&times; input</span>
+        <span class="ml-pill output">${r.output_mult}&times; output</span>
+      </span>
+      <span class="ml-arrow">more than</span>
+      <span class="ml-to">${escapeHtml(r.to_label)}</span>
+    </div>
+  `).join("");
+}
+
 function render(snap) {
   lastSnapshot = snap;
   if (snap.pricing) {
@@ -746,6 +824,9 @@ function render(snap) {
       pricingModel = Object.keys(pricingTable)[0];
     }
     renderModelToggle();
+  }
+  if (snap.multipliers) {
+    renderMultipliers(snap);
   }
   renderHeadline(snap);
   renderFeed(snap);

@@ -101,6 +101,33 @@ def _costs_for(u: Usage) -> dict[str, float]:
     return {mid: _cost(u, p) for mid, p in PRICING.items()}
 
 
+def compute_multipliers() -> list[dict[str, Any]]:
+    """Compute pairwise cost multipliers between every pair of models.
+
+    Returns a list of {from_model, from_label, to_model, to_label,
+    input_mult, output_mult} for every ordered pair where from > to.
+    """
+    mids = list(PRICING.keys())
+    result: list[dict[str, Any]] = []
+    for i, hi in enumerate(mids):
+        for lo in mids[i + 1 :]:
+            p_hi = PRICING[hi]
+            p_lo = PRICING[lo]
+            input_mult = p_hi["input"] / p_lo["input"]
+            output_mult = p_hi["output"] / p_lo["output"]
+            result.append(
+                {
+                    "from_model": hi,
+                    "from_label": p_hi["label"],
+                    "to_model": lo,
+                    "to_label": p_lo["label"],
+                    "input_mult": round(input_mult, 1),
+                    "output_mult": round(output_mult, 1),
+                }
+            )
+    return result
+
+
 def parse_anthropic_usage(usage: dict[str, Any]) -> Usage:
     return Usage(
         input_tokens=int(usage.get("input_tokens", 0) or 0),
@@ -383,6 +410,7 @@ class Stats:
                 "costs": _costs_for(self.total),
             },
             "pricing": PRICING,
+            "multipliers": compute_multipliers(),
             "started_at": self.started_at,
             "recent": list(self.requests)[:50],
         }
