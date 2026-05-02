@@ -886,7 +886,7 @@ function renderHeadline(snap) {
     el.output.textContent = fmtN.format(t.output_tokens);
     el.cache.textContent = fmtN.format(t.cache_read_tokens);
 
-    const totalIn = t.input_tokens + t.cache_read_tokens;
+    const totalIn = t.input_tokens + t.cache_read_tokens + t.cache_creation_tokens;
     el.sCache.textContent = totalIn > 0
       ? `${(t.cache_read_tokens / totalIn * 100).toFixed(1)}% of prompt cached`
       : " ";
@@ -921,7 +921,7 @@ function renderHeadline(snap) {
     el.output.textContent = fmtN.format(latest.output_tokens);
     el.cache.textContent = fmtN.format(latest.cache_read_tokens);
 
-    const promptSize = latest.input_tokens + latest.cache_read_tokens;
+    const promptSize = latest.input_tokens + latest.cache_read_tokens + latest.cache_creation_tokens;
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
       : " ";
