@@ -17,11 +17,13 @@
     /* Data colors — chosen for AA contrast on white */
     --in: #0969da;          /* input / user */
     --out: #bc4c00;         /* output / assistant (burnt orange) */
-    --cache: #1a7f37;       /* cached prefix (green) */
+    --cache: #1a7f37;       /* cached prefix read (green) */
+    --cwrite: #9a6700;      /* cache write (amber -- 1.25x input cost) */
     --cost: #cf222e;        /* cost / metered (red) */
     --in-soft: #ddf4ff;
     --out-soft: #fff1e5;
     --cache-soft: #dafbe1;
+    --cwrite-soft: #fff8c5;
     --cost-soft: #ffebe9;
     --think: #8250df;
     --think-soft: #fbefff;
@@ -154,7 +156,7 @@
   /* ---------- meters ---------- */
   .meters {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 16px;
   }
   .meter {
@@ -187,6 +189,7 @@
   .meter.input  .value { color: var(--in); }
   .meter.output .value { color: var(--out); }
   .meter.cache  .value { color: var(--cache); }
+  .meter.cwrite .value { color: var(--cwrite); }
 
   /* ---------- multiplier reference ---------- */
   .multiplier-disclosure {
@@ -275,7 +278,7 @@
   .feed-list { max-height: 460px; overflow-y: auto; }
   .feed-row {
     display: grid;
-    grid-template-columns: 80px 1fr 130px 80px 80px 80px 100px;
+    grid-template-columns: 80px 1fr 130px 80px 80px 80px 80px 100px;
     align-items: center;
     gap: 8px;
     padding: 12px 20px;
@@ -314,9 +317,10 @@
     white-space: nowrap;
   }
   .feed-row .replay-pill .new-n { color: var(--in); font-weight: 600; }
-  .feed-row .num.in    { color: var(--in); text-align: right; }
-  .feed-row .num.out   { color: var(--out); text-align: right; }
-  .feed-row .num.cache { color: var(--cache); text-align: right; }
+  .feed-row .num.in     { color: var(--in); text-align: right; }
+  .feed-row .num.out    { color: var(--out); text-align: right; }
+  .feed-row .num.cache  { color: var(--cache); text-align: right; }
+  .feed-row .num.cwrite { color: var(--cwrite); text-align: right; }
   .feed-row .cost      { color: var(--cost); text-align: right; font-weight: 600; }
   .feed-row.flash { animation: flash 0.8s ease-out; }
   @keyframes flash {
@@ -768,6 +772,11 @@
         <div class="value" id="m-cache">0</div>
         <div class="sub" id="s-cache">&nbsp;</div>
       </div>
+      <div class="meter cwrite">
+        <div class="label" id="l-cwrite">Cache writes (cumulative)</div>
+        <div class="value" id="m-cwrite">0</div>
+        <div class="sub" id="s-cwrite">&nbsp;</div>
+      </div>
     </section>
 
     <section class="feed">
@@ -810,12 +819,15 @@ const el = {
   input: document.getElementById("m-input"),
   output: document.getElementById("m-output"),
   cache: document.getElementById("m-cache"),
+  cwrite: document.getElementById("m-cwrite"),
   lInput: document.getElementById("l-input"),
   lOutput: document.getElementById("l-output"),
   lCache: document.getElementById("l-cache"),
+  lCwrite: document.getElementById("l-cwrite"),
   sInput: document.getElementById("s-input"),
   sOutput: document.getElementById("s-output"),
   sCache: document.getElementById("s-cache"),
+  sCwrite: document.getElementById("s-cwrite"),
   feed: document.getElementById("feed"),
   reqCount: document.getElementById("req-count"),
   statusText: document.getElementById("status-text"),
@@ -882,17 +894,20 @@ function renderHeadline(snap) {
     el.lInput.textContent = "Input tokens (cumulative)";
     el.lOutput.textContent = "Output tokens (cumulative)";
     el.lCache.textContent = "Cache reads (cumulative)";
+    el.lCwrite.textContent = "Cache writes (cumulative)";
     el.input.textContent = fmtN.format(t.input_tokens);
     el.output.textContent = fmtN.format(t.output_tokens);
     el.cache.textContent = fmtN.format(t.cache_read_tokens);
+    el.cwrite.textContent = fmtN.format(t.cache_creation_tokens);
 
     const totalIn = t.input_tokens + t.cache_read_tokens + t.cache_creation_tokens;
     el.sCache.textContent = totalIn > 0
       ? `${(t.cache_read_tokens / totalIn * 100).toFixed(1)}% of prompt cached`
       : " ";
-    el.sInput.textContent = t.cache_creation_tokens > 0
-      ? `+${fmtN.format(t.cache_creation_tokens)} cache writes`
+    el.sInput.textContent = totalIn > 0
+      ? `${(t.input_tokens / totalIn * 100).toFixed(1)}% uncached`
       : " ";
+    el.sCwrite.textContent = " ";
     el.sOutput.textContent = t.thinking_tokens > 0
       ? `incl. ${fmtN.format(t.thinking_tokens)} thinking` : " ";
   } else {
@@ -900,8 +915,8 @@ function renderHeadline(snap) {
     if (!latest) {
       el.cost.textContent = "$0.0000";
       el.costSub.innerHTML = ratesLine();
-      ["input", "output", "cache"].forEach(k => { el[k].textContent = "0"; });
-      el.sInput.textContent = el.sOutput.textContent = el.sCache.textContent = " ";
+      ["input", "output", "cache", "cwrite"].forEach(k => { el[k].textContent = "0"; });
+      el.sInput.textContent = el.sOutput.textContent = el.sCache.textContent = el.sCwrite.textContent = " ";
       return;
     }
     el.cost.textContent = fmtCost(costOf(latest));
@@ -917,13 +932,18 @@ function renderHeadline(snap) {
     el.lInput.textContent = "Input tokens (this turn)";
     el.lOutput.textContent = "Output tokens (this turn)";
     el.lCache.textContent = "Cache reads (this turn)";
+    el.lCwrite.textContent = "Cache writes (this turn)";
     el.input.textContent = fmtN.format(latest.input_tokens);
     el.output.textContent = fmtN.format(latest.output_tokens);
     el.cache.textContent = fmtN.format(latest.cache_read_tokens);
+    el.cwrite.textContent = fmtN.format(latest.cache_creation_tokens);
 
     const promptSize = latest.input_tokens + latest.cache_read_tokens + latest.cache_creation_tokens;
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
+      : " ";
+    el.sCwrite.textContent = latest.cache_creation_tokens > 0
+      ? `1.25× input rate`
       : " ";
     let modelInfo = `model: ${latest.model || "?"}`;
     if (latest.thinking_tokens > 0) {
@@ -966,6 +986,7 @@ function renderFeed(snap) {
       <span class="num in">${fmtN.format(r.input_tokens)}</span>
       <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
       <span class="num cache">${fmtN.format(r.cache_read_tokens)}</span>
+      <span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>
       <span class="cost">${fmtCost(costOf(r))}</span>
     </div>`;
   }).join("");
