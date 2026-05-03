@@ -67,9 +67,9 @@ Client → llm-meter (your proxy, port 8001) → Upstream (oMLX, port 8000)
 | Feature | Description |
 |---|---|
 | **Live cost card** | Real-time dollar amount, updated per streaming response |
-| **Token meters** | Input, output, and cache-read token counts |
+| **Token meters** | Cache-read, cache-write, input (uncached), and output token counts |
 | **Replay detection** | Shows how many messages were replayed vs. new each turn |
-| **Cache monitoring** | Tracks cache reads vs. writes, shows cached prefix % |
+| **Cache monitoring** | Tracks cache reads vs. writes, shows cached prefix %. On the OpenAI Chat Completions path the cache-write slot displays "n/a" because the usage spec doesn't expose writes. |
 | **Full transcript viewer** | Click any request to inspect messages, tool calls, system prompt |
 | **Per-turn / cumulative toggle** | Switch between aggregate view and per-request cost |
 | **Model comparison** | Select different Claude models to see what costs would be |
@@ -81,11 +81,11 @@ The dashboard at `http://<host>:<port>/` shows:
 
 - **Header** — live status dot, cumulative / per-turn toggle, reset button
 - **Cost card** — total dollar amount (or per-turn), selected model's rates
-- **Meters** — input, output, cache token counts with sub-metrics
+- **Meters** — four tiles in prompt-cost order (cache reads, cache writes, input uncached, output) with sub-metrics
 - **Request feed** — most recent requests with model, tokens, cost; click any row for the full transcript modal
 
 The transcript modal shows:
-- Summary grid (tokens + cost)
+- Summary grid: cache read, cache write, input (uncached), output, cost (cache-write cell shows "n/a" for OpenAI-protocol requests)
 - Replay banner (new vs. replayed message count)
 - System prompt (expandable, with cache indicator)
 - All messages sent as input this turn (thick border = new, thin = replayed)
