@@ -153,6 +153,42 @@
     box-shadow: inset 0 -2px 0 var(--cost);
   }
 
+  /* ---------- subscription differential ---------- */
+  .sub-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 22px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    align-items: center;
+    box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+  }
+  .sub-card[hidden] { display: none; }
+  .sub-cell .l {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+  .sub-cell .v {
+    font-size: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .sub-cell .s {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .sub-cell.api .v   { color: var(--cost); }
+  .sub-cell.flat .v  { color: var(--text); }
+  .sub-cell.diff .v  { color: var(--cache); }
+  .sub-cell.diff.under .v { color: var(--out); }
+
   /* ---------- meters ---------- */
   .meters {
     display: grid;
@@ -758,6 +794,24 @@
       </details>
     </div>
 
+    <div class="sub-card" id="sub-card" hidden>
+      <div class="sub-cell api">
+        <div class="l">API equivalent</div>
+        <div class="v" id="sub-api">$0.00</div>
+        <div class="s" id="sub-api-note">&nbsp;</div>
+      </div>
+      <div class="sub-cell flat">
+        <div class="l" id="sub-flat-label">Flat-rate plan</div>
+        <div class="v" id="sub-flat">$0.00</div>
+        <div class="s">&middot; per month</div>
+      </div>
+      <div class="sub-cell diff" id="sub-diff-cell">
+        <div class="l">Differential</div>
+        <div class="v" id="sub-diff">&mdash;</div>
+        <div class="s" id="sub-diff-note">&nbsp;</div>
+      </div>
+    </div>
+
     <section class="meters">
       <div class="meter cache">
         <div class="label" id="l-cache">Cache reads (cumulative)</div>
@@ -837,6 +891,14 @@ const el = {
   reset: document.getElementById("reset"),
   toggle: document.getElementById("mode-toggle"),
   modelToggle: document.getElementById("model-toggle"),
+  subCard: document.getElementById("sub-card"),
+  subApi: document.getElementById("sub-api"),
+  subApiNote: document.getElementById("sub-api-note"),
+  subFlat: document.getElementById("sub-flat"),
+  subFlatLabel: document.getElementById("sub-flat-label"),
+  subDiff: document.getElementById("sub-diff"),
+  subDiffCell: document.getElementById("sub-diff-cell"),
+  subDiffNote: document.getElementById("sub-diff-note"),
   modalBg: document.getElementById("modal-bg"),
   modalTitle: document.getElementById("modal-title"),
   modalBody: document.getElementById("modal-body"),
@@ -1028,6 +1090,42 @@ function renderMultipliers(snap) {
   `).join("");
 }
 
+function renderSubscription(snap) {
+  const sub = snap.subscription;
+  if (!sub) {
+    el.subCard.hidden = true;
+    return;
+  }
+  el.subCard.hidden = false;
+  const apiCost = (snap.totals && snap.totals.costs && snap.totals.costs[pricingModel]) || 0;
+  const flat = sub.monthly_cost_usd || 0;
+  el.subApi.textContent = "$" + apiCost.toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  el.subApiNote.textContent = `at ${modelLabel()} rates`;
+  el.subFlatLabel.textContent = sub.label || "Flat-rate plan";
+  el.subFlat.textContent = "$" + flat.toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  if (apiCost <= 0 || flat <= 0) {
+    el.subDiff.textContent = "—";
+    el.subDiffNote.textContent = "no usage yet";
+    el.subDiffCell.classList.remove("under");
+    return;
+  }
+  if (apiCost >= flat) {
+    const ratio = apiCost / flat;
+    el.subDiff.textContent = `${ratio.toFixed(2)}× cheaper on flat rate`;
+    el.subDiffNote.textContent = `you'd be saving $${(apiCost - flat).toFixed(2)}`;
+    el.subDiffCell.classList.remove("under");
+  } else {
+    const ratio = flat / apiCost;
+    el.subDiff.textContent = `${ratio.toFixed(2)}× more on flat rate`;
+    el.subDiffNote.textContent = `API would cost $${apiCost.toFixed(2)} this month so far`;
+    el.subDiffCell.classList.add("under");
+  }
+}
+
 function render(snap) {
   lastSnapshot = snap;
   if (snap.pricing) {
@@ -1041,6 +1139,7 @@ function render(snap) {
     renderMultipliers(snap);
   }
   renderHeadline(snap);
+  renderSubscription(snap);
   renderFeed(snap);
 }
 
@@ -1512,6 +1611,7 @@ el.modelToggle.addEventListener("click", (e) => {
   }
   if (lastSnapshot) {
     renderHeadline(lastSnapshot);
+    renderSubscription(lastSnapshot);
     renderFeed(lastSnapshot);
   }
   // Refresh modal if open

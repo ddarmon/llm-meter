@@ -26,23 +26,28 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
+from .session_logs import SessionTurn
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Comparison-pricing table, USD per million tokens.
 # Keys are stable IDs surfaced to the frontend; `label` is for display.
+# cache_write_5m = 1.25x input, cache_write_1h = 2x input, cache_read = 0.1x input.
 PRICING: dict[str, dict[str, Any]] = {
     "opus_47": {
         "label": "Claude Opus 4.7",
         "input": 5.00,
         "output": 25.00,
-        "cache_write_5m": 6.25,  # 1.25x input
-        "cache_read": 0.50,  # 0.10x input
+        "cache_write_5m": 6.25,
+        "cache_write_1h": 10.00,
+        "cache_read": 0.50,
     },
     "sonnet_46": {
         "label": "Claude Sonnet 4.6",
         "input": 3.00,
         "output": 15.00,
         "cache_write_5m": 3.75,
+        "cache_write_1h": 6.00,
         "cache_read": 0.30,
     },
     "haiku_45": {
@@ -50,8 +55,20 @@ PRICING: dict[str, dict[str, Any]] = {
         "input": 1.00,
         "output": 5.00,
         "cache_write_5m": 1.25,
+        "cache_write_1h": 2.00,
         "cache_read": 0.10,
     },
+}
+
+# Real Anthropic API model IDs that should resolve to the comparison-pricing
+# entries above. Used when ingesting JSONL session logs (which carry the real
+# IDs) so the dashboard can colour them with the right rates without forcing
+# the user to pick a model manually.
+MODEL_ID_TO_PRICING: dict[str, str] = {
+    "claude-opus-4-7": "opus_47",
+    "claude-sonnet-4-6": "sonnet_46",
+    "claude-haiku-4-5": "haiku_45",
+    "claude-haiku-4-5-20251001": "haiku_45",
 }
 
 
@@ -63,6 +80,12 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    # Cache writes split by TTL. Anthropic prices 1h at 2x input vs 1.25x for
+    # 5m, and Claude Code uses the 1h bucket almost exclusively, so the split
+    # has to be preserved end-to-end. `cache_creation_tokens` is the rolled-up
+    # sum (5m + 1h) used by callers that don't have the breakdown.
+    cache_creation_5m_tokens: int = 0
+    cache_creation_1h_tokens: int = 0
     cache_creation_tokens: int = 0
     thinking_tokens: int = 0
 
@@ -70,6 +93,8 @@ class Usage:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cache_read_tokens += other.cache_read_tokens
+        self.cache_creation_5m_tokens += other.cache_creation_5m_tokens
+        self.cache_creation_1h_tokens += other.cache_creation_1h_tokens
         self.cache_creation_tokens += other.cache_creation_tokens
         self.thinking_tokens += other.thinking_tokens
 
@@ -87,17 +112,30 @@ class Usage:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation_5m_tokens": self.cache_creation_5m_tokens,
+            "cache_creation_1h_tokens": self.cache_creation_1h_tokens,
             "cache_creation_tokens": self.cache_creation_tokens,
             "thinking_tokens": self.thinking_tokens,
         }
 
 
 def _cost(u: Usage, p: dict[str, Any]) -> float:
+    # Prefer the split fields when present; otherwise fall back to pricing
+    # the rolled-up cache_creation_tokens at the 5m rate, which preserves
+    # behavior for callers that don't yet supply the split (older proxies,
+    # oMLX, OpenAI-protocol responses).
+    if u.cache_creation_5m_tokens or u.cache_creation_1h_tokens:
+        cache_write_cost = (
+            u.cache_creation_5m_tokens * p["cache_write_5m"]
+            + u.cache_creation_1h_tokens * p["cache_write_1h"]
+        )
+    else:
+        cache_write_cost = u.cache_creation_tokens * p["cache_write_5m"]
     return (
         u.input_tokens * p["input"]
         + u.output_tokens * p["output"]
         + u.cache_read_tokens * p["cache_read"]
-        + u.cache_creation_tokens * p["cache_write_5m"]
+        + cache_write_cost
     ) / 1_000_000
 
 
@@ -136,11 +174,23 @@ def parse_anthropic_usage(usage: dict[str, Any]) -> Usage:
     # Anthropic bundles extended-thinking tokens into output_tokens and does
     # not break them out in `usage`. We derive an estimate from the thinking
     # block text in derive_anthropic_thinking_tokens().
+    cc = usage.get("cache_creation") or {}
+    cc5 = int(cc.get("ephemeral_5m_input_tokens", 0) or 0)
+    cc1 = int(cc.get("ephemeral_1h_input_tokens", 0) or 0)
+    cc_total = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    # If the split is missing (older upstreams, oMLX), keep the rolled-up
+    # field populated and let _cost fall back to 5m pricing for it.
+    if cc5 == 0 and cc1 == 0:
+        rolled = cc_total
+    else:
+        rolled = cc5 + cc1
     return Usage(
         input_tokens=int(usage.get("input_tokens", 0) or 0),
         output_tokens=int(usage.get("output_tokens", 0) or 0),
         cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
-        cache_creation_tokens=int(usage.get("cache_creation_input_tokens", 0) or 0),
+        cache_creation_5m_tokens=cc5,
+        cache_creation_1h_tokens=cc1,
+        cache_creation_tokens=rolled,
     )
 
 
@@ -312,6 +362,8 @@ class StreamAccumulator:
                 parsed = parse_anthropic_usage(u)
                 self.usage.input_tokens = parsed.input_tokens
                 self.usage.cache_read_tokens = parsed.cache_read_tokens
+                self.usage.cache_creation_5m_tokens = parsed.cache_creation_5m_tokens
+                self.usage.cache_creation_1h_tokens = parsed.cache_creation_1h_tokens
                 self.usage.cache_creation_tokens = parsed.cache_creation_tokens
                 # message_start often reports output_tokens=1 placeholder; ignore.
         elif etype == "message_delta":
@@ -325,8 +377,13 @@ class StreamAccumulator:
             if "cache_read_input_tokens" in u or "cache_creation_input_tokens" in u:
                 cache_read = int(u.get("cache_read_input_tokens", 0) or 0)
                 cache_creation = int(u.get("cache_creation_input_tokens", 0) or 0)
+                cc = u.get("cache_creation") or {}
+                cc5 = int(cc.get("ephemeral_5m_input_tokens", 0) or 0)
+                cc1 = int(cc.get("ephemeral_1h_input_tokens", 0) or 0)
                 self.usage.cache_read_tokens = cache_read
                 self.usage.cache_creation_tokens = cache_creation
+                self.usage.cache_creation_5m_tokens = cc5
+                self.usage.cache_creation_1h_tokens = cc1
                 delta_input = u.get("input_tokens")
                 if delta_input is None or int(delta_input or 0) == 0:
                     adjusted = self.usage.input_tokens - cache_read - cache_creation
@@ -475,20 +532,32 @@ class Stats:
     transcripts: dict[int, dict[str, Any]] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
     request_seq: int = 0
-    last_messages: Optional[list] = None
+    # Last-seen messages keyed by session id, so concurrent sessions don't
+    # contaminate each other's replay diffs. The proxy path uses None as its
+    # session key, which keeps the original "single conversation" behavior.
+    last_messages_by_session: dict[Optional[str], list] = field(default_factory=dict)
     subscribers: list[asyncio.Queue] = field(default_factory=list)
+    flat_rate_usd: Optional[float] = None
+    flat_rate_label: str = "Flat-rate plan"
 
     def snapshot(self) -> dict[str, Any]:
-        return {
+        snap: dict[str, Any] = {
             "totals": {
                 **self.total.to_dict(),
                 "costs": _costs_for(self.total),
             },
             "pricing": PRICING,
+            "model_id_aliases": MODEL_ID_TO_PRICING,
             "multipliers": compute_multipliers(),
             "started_at": self.started_at,
             "recent": list(self.requests)[:50],
         }
+        if self.flat_rate_usd is not None:
+            snap["subscription"] = {
+                "label": self.flat_rate_label,
+                "monthly_cost_usd": self.flat_rate_usd,
+            }
+        return snap
 
     def record(
         self,
@@ -503,6 +572,8 @@ class Stats:
         raw_response_body: Optional[str] = None,
         raw_response_stream: Optional[dict[str, Any]] = None,
         truncated: bool = False,
+        session_id: Optional[str] = None,
+        ts: Optional[float] = None,
     ) -> Optional[int]:
         # Skip empty proxy hits (health checks etc.) but keep real LLM
         # requests even if usage parsing failed (we still want the transcript).
@@ -517,23 +588,26 @@ class Stats:
         rid = self.request_seq
 
         msgs = (request_payload or {}).get("messages") or []
-        replay = compute_replay(msgs, self.last_messages)
-        self.last_messages = msgs
+        replay = compute_replay(msgs, self.last_messages_by_session.get(session_id))
+        self.last_messages_by_session[session_id] = msgs
 
         rec = {
             "id": rid,
-            "ts": time.time(),
+            "ts": ts if ts is not None else time.time(),
             "path": path,
             "model": model or (request_payload or {}).get("model"),
             "format": (request_payload or {}).get("format"),
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "cache_read_tokens": usage.cache_read_tokens,
+            "cache_creation_5m_tokens": usage.cache_creation_5m_tokens,
+            "cache_creation_1h_tokens": usage.cache_creation_1h_tokens,
             "cache_creation_tokens": usage.cache_creation_tokens,
             "thinking_tokens": usage.thinking_tokens,
             "costs": _costs_for(usage),
             "duration_ms": duration_ms,
             "message_count": len(msgs),
+            "session_id": session_id,
             "replay": {
                 "new_count": replay["new_count"],
                 "replayed_count": replay["replayed_count"],
@@ -572,8 +646,39 @@ class Stats:
         self.transcripts.clear()
         self.started_at = time.time()
         self.request_seq = 0
-        self.last_messages = None
+        self.last_messages_by_session.clear()
         self._broadcast()
+
+    def record_turn(self, turn: SessionTurn) -> Optional[int]:
+        """Ingest a parsed Claude Code session turn into the same pipeline
+        that proxied requests use. Adapter only — no parsing or pricing
+        logic lives here."""
+        usage = Usage(
+            input_tokens=turn.usage.input_tokens,
+            output_tokens=turn.usage.output_tokens,
+            cache_read_tokens=turn.usage.cache_read_tokens,
+            cache_creation_5m_tokens=turn.usage.cache_creation_5m_tokens,
+            cache_creation_1h_tokens=turn.usage.cache_creation_1h_tokens,
+            cache_creation_tokens=turn.usage.cache_creation_tokens,
+        )
+        request_payload = {
+            "format": "anthropic",
+            "model": turn.model,
+            "messages": turn.messages,
+            "tools": [],
+            "system": None,
+        }
+        path = f"/v1/messages [session {turn.session_id[:8]}]"
+        return self.record(
+            path=path,
+            model=turn.model,
+            usage=usage,
+            duration_ms=0,
+            request_payload=request_payload,
+            response_payload=turn.response,
+            session_id=turn.session_id,
+            ts=turn.timestamp,
+        )
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -620,9 +725,15 @@ def _filter_response_headers(headers) -> list[tuple[str, str]]:
     return [(k, v) for k, v in headers.items() if k.lower() not in _HOP_BY_HOP]
 
 
-def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
+def build_app(
+    *,
+    upstream: str,
+    backend: str = "openai_anthropic",
+    flat_rate_usd: Optional[float] = None,
+    flat_rate_label: str = "Flat-rate plan",
+) -> tuple[FastAPI, "Stats"]:
     app = FastAPI()
-    stats = Stats()
+    stats = Stats(flat_rate_usd=flat_rate_usd, flat_rate_label=flat_rate_label)
     upstream = upstream.rstrip("/")
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=600, write=60, pool=10))
 
@@ -794,4 +905,4 @@ def build_app(*, upstream: str, backend: str = "openai_anthropic") -> FastAPI:
             media_type=ctype,
         )
 
-    return app
+    return app, stats
