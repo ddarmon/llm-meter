@@ -318,6 +318,22 @@ class StreamAccumulator:
             u = evt.get("usage") or {}
             if "output_tokens" in u:
                 self.usage.output_tokens = int(u["output_tokens"] or 0)
+            # Some upstreams (e.g. oMLX) report the cache breakdown in
+            # message_delta instead of message_start, with input_tokens=0
+            # and the original message_start.input_tokens being the *total*
+            # (uncached + cache_read + cache_creation). Honor either layout.
+            if "cache_read_input_tokens" in u or "cache_creation_input_tokens" in u:
+                cache_read = int(u.get("cache_read_input_tokens", 0) or 0)
+                cache_creation = int(u.get("cache_creation_input_tokens", 0) or 0)
+                self.usage.cache_read_tokens = cache_read
+                self.usage.cache_creation_tokens = cache_creation
+                delta_input = u.get("input_tokens")
+                if delta_input is None or int(delta_input or 0) == 0:
+                    adjusted = self.usage.input_tokens - cache_read - cache_creation
+                    if adjusted >= 0:
+                        self.usage.input_tokens = adjusted
+                else:
+                    self.usage.input_tokens = int(delta_input)
             delta = evt.get("delta") or {}
             if "stop_reason" in delta:
                 self._anth_stop_reason = delta["stop_reason"]

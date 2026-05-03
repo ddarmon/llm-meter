@@ -17,11 +17,13 @@
     /* Data colors — chosen for AA contrast on white */
     --in: #0969da;          /* input / user */
     --out: #bc4c00;         /* output / assistant (burnt orange) */
-    --cache: #1a7f37;       /* cached prefix (green) */
+    --cache: #1a7f37;       /* cached prefix read (green) */
+    --cwrite: #0a7383;      /* cache write (teal -- 1.25x input cost) */
     --cost: #cf222e;        /* cost / metered (red) */
     --in-soft: #ddf4ff;
     --out-soft: #fff1e5;
     --cache-soft: #dafbe1;
+    --cwrite-soft: #cff5f6;
     --cost-soft: #ffebe9;
     --think: #8250df;
     --think-soft: #fbefff;
@@ -154,7 +156,7 @@
   /* ---------- meters ---------- */
   .meters {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 16px;
   }
   .meter {
@@ -187,6 +189,9 @@
   .meter.input  .value { color: var(--in); }
   .meter.output .value { color: var(--out); }
   .meter.cache  .value { color: var(--cache); }
+  .meter.cwrite .value { color: var(--cwrite); }
+  .meter.na .value, .summary-cell.na .v, .feed-row .num.na { color: var(--muted); font-weight: 500; }
+  .meter.na, .summary-cell.na { opacity: 0.7; }
 
   /* ---------- multiplier reference ---------- */
   .multiplier-disclosure {
@@ -275,7 +280,7 @@
   .feed-list { max-height: 460px; overflow-y: auto; }
   .feed-row {
     display: grid;
-    grid-template-columns: 80px 1fr 130px 80px 80px 80px 100px;
+    grid-template-columns: 80px 1fr 130px 80px 80px 80px 80px 100px;
     align-items: center;
     gap: 8px;
     padding: 12px 20px;
@@ -314,9 +319,10 @@
     white-space: nowrap;
   }
   .feed-row .replay-pill .new-n { color: var(--in); font-weight: 600; }
-  .feed-row .num.in    { color: var(--in); text-align: right; }
-  .feed-row .num.out   { color: var(--out); text-align: right; }
-  .feed-row .num.cache { color: var(--cache); text-align: right; }
+  .feed-row .num.in     { color: var(--in); text-align: right; }
+  .feed-row .num.out    { color: var(--out); text-align: right; }
+  .feed-row .num.cache  { color: var(--cache); text-align: right; }
+  .feed-row .num.cwrite { color: var(--cwrite); text-align: right; }
   .feed-row .cost      { color: var(--cost); text-align: right; font-weight: 600; }
   .feed-row.flash { animation: flash 0.8s ease-out; }
   @keyframes flash {
@@ -484,7 +490,7 @@
 
   .summary-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 10px;
     margin-bottom: 18px;
   }
@@ -753,6 +759,16 @@
     </div>
 
     <section class="meters">
+      <div class="meter cache">
+        <div class="label" id="l-cache">Cache reads (cumulative)</div>
+        <div class="value" id="m-cache">0</div>
+        <div class="sub" id="s-cache">&nbsp;</div>
+      </div>
+      <div class="meter cwrite">
+        <div class="label" id="l-cwrite">Cache writes (cumulative)</div>
+        <div class="value" id="m-cwrite">0</div>
+        <div class="sub" id="s-cwrite">&nbsp;</div>
+      </div>
       <div class="meter input">
         <div class="label" id="l-input">Input tokens (cumulative)</div>
         <div class="value" id="m-input">0</div>
@@ -762,11 +778,6 @@
         <div class="label" id="l-output">Output tokens (cumulative)</div>
         <div class="value" id="m-output">0</div>
         <div class="sub" id="s-output">&nbsp;</div>
-      </div>
-      <div class="meter cache">
-        <div class="label" id="l-cache">Cache reads (cumulative)</div>
-        <div class="value" id="m-cache">0</div>
-        <div class="sub" id="s-cache">&nbsp;</div>
       </div>
     </section>
 
@@ -810,12 +821,15 @@ const el = {
   input: document.getElementById("m-input"),
   output: document.getElementById("m-output"),
   cache: document.getElementById("m-cache"),
+  cwrite: document.getElementById("m-cwrite"),
   lInput: document.getElementById("l-input"),
   lOutput: document.getElementById("l-output"),
   lCache: document.getElementById("l-cache"),
+  lCwrite: document.getElementById("l-cwrite"),
   sInput: document.getElementById("s-input"),
   sOutput: document.getElementById("s-output"),
   sCache: document.getElementById("s-cache"),
+  sCwrite: document.getElementById("s-cwrite"),
   feed: document.getElementById("feed"),
   reqCount: document.getElementById("req-count"),
   statusText: document.getElementById("status-text"),
@@ -874,6 +888,13 @@ function renderHeadline(snap) {
   const recent = snap.recent || [];
   const latest = recent[0];
 
+  const onlyOpenai = recent.length > 0
+    && recent.every(r => r.format === "openai")
+    && t.cache_creation_tokens === 0;
+  const cwriteTile = el.cwrite.parentElement;
+  cwriteTile.classList.toggle("na", onlyOpenai);
+  cwriteTile.title = onlyOpenai ? "OpenAI usage spec doesn't expose cache writes" : "";
+
   if (mode === "cumulative") {
     el.costModeLabel.innerHTML = `Cumulative cost &mdash; if billed at ${escapeHtml(modelLabel())} rates`;
     el.cost.textContent = fmtCost(t.costs && t.costs[pricingModel]);
@@ -882,17 +903,20 @@ function renderHeadline(snap) {
     el.lInput.textContent = "Input tokens (cumulative)";
     el.lOutput.textContent = "Output tokens (cumulative)";
     el.lCache.textContent = "Cache reads (cumulative)";
+    el.lCwrite.textContent = "Cache writes (cumulative)";
     el.input.textContent = fmtN.format(t.input_tokens);
     el.output.textContent = fmtN.format(t.output_tokens);
     el.cache.textContent = fmtN.format(t.cache_read_tokens);
+    el.cwrite.textContent = onlyOpenai ? "n/a" : fmtN.format(t.cache_creation_tokens);
 
-    const totalIn = t.input_tokens + t.cache_read_tokens;
+    const totalIn = t.input_tokens + t.cache_read_tokens + t.cache_creation_tokens;
     el.sCache.textContent = totalIn > 0
       ? `${(t.cache_read_tokens / totalIn * 100).toFixed(1)}% of prompt cached`
       : " ";
-    el.sInput.textContent = t.cache_creation_tokens > 0
-      ? `+${fmtN.format(t.cache_creation_tokens)} cache writes`
+    el.sInput.textContent = totalIn > 0
+      ? `${(t.input_tokens / totalIn * 100).toFixed(1)}% uncached`
       : " ";
+    el.sCwrite.textContent = onlyOpenai ? "not reported by OpenAI" : " ";
     el.sOutput.textContent = t.thinking_tokens > 0
       ? `incl. ${fmtN.format(t.thinking_tokens)} thinking` : " ";
   } else {
@@ -900,8 +924,8 @@ function renderHeadline(snap) {
     if (!latest) {
       el.cost.textContent = "$0.0000";
       el.costSub.innerHTML = ratesLine();
-      ["input", "output", "cache"].forEach(k => { el[k].textContent = "0"; });
-      el.sInput.textContent = el.sOutput.textContent = el.sCache.textContent = " ";
+      ["input", "output", "cache", "cwrite"].forEach(k => { el[k].textContent = "0"; });
+      el.sInput.textContent = el.sOutput.textContent = el.sCache.textContent = el.sCwrite.textContent = " ";
       return;
     }
     el.cost.textContent = fmtCost(costOf(latest));
@@ -914,17 +938,26 @@ function renderHeadline(snap) {
         (r.new_count > 0 ? ` and <strong>${fmtN.format(r.new_count)}</strong> new` : "");
     }
 
+    const turnIsOpenai = latest.format === "openai";
+    cwriteTile.classList.toggle("na", turnIsOpenai);
+    cwriteTile.title = turnIsOpenai ? "OpenAI usage spec doesn't expose cache writes" : "";
+
     el.lInput.textContent = "Input tokens (this turn)";
     el.lOutput.textContent = "Output tokens (this turn)";
     el.lCache.textContent = "Cache reads (this turn)";
+    el.lCwrite.textContent = "Cache writes (this turn)";
     el.input.textContent = fmtN.format(latest.input_tokens);
     el.output.textContent = fmtN.format(latest.output_tokens);
     el.cache.textContent = fmtN.format(latest.cache_read_tokens);
+    el.cwrite.textContent = turnIsOpenai ? "n/a" : fmtN.format(latest.cache_creation_tokens);
 
-    const promptSize = latest.input_tokens + latest.cache_read_tokens;
+    const promptSize = latest.input_tokens + latest.cache_read_tokens + latest.cache_creation_tokens;
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
       : " ";
+    el.sCwrite.textContent = turnIsOpenai
+      ? "not reported by OpenAI"
+      : (latest.cache_creation_tokens > 0 ? "1.25× input rate" : " ");
     let modelInfo = `model: ${latest.model || "?"}`;
     if (latest.thinking_tokens > 0) {
       const approx = latest.format === "anthropic" ? "~" : "";
@@ -959,13 +992,17 @@ function renderFeed(snap) {
     } else {
       pill = `<span class="replay-pill"><span class="new-n">+${fmtN.format(rep.new_count || 0)}</span> &middot; ${fmtN.format(rep.replayed_count || 0)} replayed</span>`;
     }
+    const cwriteCol = r.format === "openai"
+      ? `<span class="num cwrite na" title="OpenAI usage spec doesn't expose cache writes">n/a</span>`
+      : `<span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>`;
     return `<div class="feed-row${flash}" data-id="${r.id}">
       <span class="time">${fmtTime(r.ts)}</span>
       <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
       ${pill}
-      <span class="num in">${fmtN.format(r.input_tokens)}</span>
+      <span class="num cache" title="cache reads (cheapest)">${fmtN.format(r.cache_read_tokens)}</span>
+      ${cwriteCol}
+      <span class="num in" title="uncached input">${fmtN.format(r.input_tokens)}</span>
       <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
-      <span class="num cache">${fmtN.format(r.cache_read_tokens)}</span>
       <span class="cost">${fmtCost(costOf(r))}</span>
     </div>`;
   }).join("");
@@ -1337,11 +1374,17 @@ function renderTranscript(t) {
 
   el.modalTitle.innerHTML = `Request #${s.id} <small>${escapeHtml(s.model || s.path || "")} &middot; ${fmtTime(s.ts)}</small>`;
 
+  const promptTotal = (s.input_tokens || 0) + (s.cache_read_tokens || 0) + (s.cache_creation_tokens || 0);
+  const isOpenai = s.format === "openai";
+  const cwriteCell = isOpenai
+    ? `<div class="summary-cell na" title="OpenAI usage spec doesn't expose cache writes"><div class="l">Cache write</div><div class="v">n/a</div><div style="font-size:10px;color:var(--muted);margin-top:2px">not reported by OpenAI</div></div>`
+    : `<div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${(s.cache_creation_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; 1.25× input rate</div>` : ""}</div>`;
   const summaryGrid = `
     <div class="summary-grid">
-      <div class="summary-cell"><div class="l">Input</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div></div>
-      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
+      ${cwriteCell}
+      <div class="summary-cell"><div class="l">Input (uncached)</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div>${promptTotal > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">of ${fmtN.format(promptTotal)} prompt tokens</div>` : ""}</div>
+      <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
     </div>`;
 
