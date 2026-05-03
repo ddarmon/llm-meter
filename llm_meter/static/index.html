@@ -190,6 +190,8 @@
   .meter.output .value { color: var(--out); }
   .meter.cache  .value { color: var(--cache); }
   .meter.cwrite .value { color: var(--cwrite); }
+  .meter.na .value, .summary-cell.na .v, .feed-row .num.na { color: var(--muted); font-weight: 500; }
+  .meter.na, .summary-cell.na { opacity: 0.7; }
 
   /* ---------- multiplier reference ---------- */
   .multiplier-disclosure {
@@ -886,6 +888,13 @@ function renderHeadline(snap) {
   const recent = snap.recent || [];
   const latest = recent[0];
 
+  const onlyOpenai = recent.length > 0
+    && recent.every(r => r.format === "openai")
+    && t.cache_creation_tokens === 0;
+  const cwriteTile = el.cwrite.parentElement;
+  cwriteTile.classList.toggle("na", onlyOpenai);
+  cwriteTile.title = onlyOpenai ? "OpenAI usage spec doesn't expose cache writes" : "";
+
   if (mode === "cumulative") {
     el.costModeLabel.innerHTML = `Cumulative cost &mdash; if billed at ${escapeHtml(modelLabel())} rates`;
     el.cost.textContent = fmtCost(t.costs && t.costs[pricingModel]);
@@ -898,7 +907,7 @@ function renderHeadline(snap) {
     el.input.textContent = fmtN.format(t.input_tokens);
     el.output.textContent = fmtN.format(t.output_tokens);
     el.cache.textContent = fmtN.format(t.cache_read_tokens);
-    el.cwrite.textContent = fmtN.format(t.cache_creation_tokens);
+    el.cwrite.textContent = onlyOpenai ? "n/a" : fmtN.format(t.cache_creation_tokens);
 
     const totalIn = t.input_tokens + t.cache_read_tokens + t.cache_creation_tokens;
     el.sCache.textContent = totalIn > 0
@@ -907,7 +916,7 @@ function renderHeadline(snap) {
     el.sInput.textContent = totalIn > 0
       ? `${(t.input_tokens / totalIn * 100).toFixed(1)}% uncached`
       : " ";
-    el.sCwrite.textContent = " ";
+    el.sCwrite.textContent = onlyOpenai ? "not reported by OpenAI" : " ";
     el.sOutput.textContent = t.thinking_tokens > 0
       ? `incl. ${fmtN.format(t.thinking_tokens)} thinking` : " ";
   } else {
@@ -929,6 +938,10 @@ function renderHeadline(snap) {
         (r.new_count > 0 ? ` and <strong>${fmtN.format(r.new_count)}</strong> new` : "");
     }
 
+    const turnIsOpenai = latest.format === "openai";
+    cwriteTile.classList.toggle("na", turnIsOpenai);
+    cwriteTile.title = turnIsOpenai ? "OpenAI usage spec doesn't expose cache writes" : "";
+
     el.lInput.textContent = "Input tokens (this turn)";
     el.lOutput.textContent = "Output tokens (this turn)";
     el.lCache.textContent = "Cache reads (this turn)";
@@ -936,15 +949,15 @@ function renderHeadline(snap) {
     el.input.textContent = fmtN.format(latest.input_tokens);
     el.output.textContent = fmtN.format(latest.output_tokens);
     el.cache.textContent = fmtN.format(latest.cache_read_tokens);
-    el.cwrite.textContent = fmtN.format(latest.cache_creation_tokens);
+    el.cwrite.textContent = turnIsOpenai ? "n/a" : fmtN.format(latest.cache_creation_tokens);
 
     const promptSize = latest.input_tokens + latest.cache_read_tokens + latest.cache_creation_tokens;
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
       : " ";
-    el.sCwrite.textContent = latest.cache_creation_tokens > 0
-      ? `1.25× input rate`
-      : " ";
+    el.sCwrite.textContent = turnIsOpenai
+      ? "not reported by OpenAI"
+      : (latest.cache_creation_tokens > 0 ? "1.25× input rate" : " ");
     let modelInfo = `model: ${latest.model || "?"}`;
     if (latest.thinking_tokens > 0) {
       const approx = latest.format === "anthropic" ? "~" : "";
@@ -979,12 +992,15 @@ function renderFeed(snap) {
     } else {
       pill = `<span class="replay-pill"><span class="new-n">+${fmtN.format(rep.new_count || 0)}</span> &middot; ${fmtN.format(rep.replayed_count || 0)} replayed</span>`;
     }
+    const cwriteCol = r.format === "openai"
+      ? `<span class="num cwrite na" title="OpenAI usage spec doesn't expose cache writes">n/a</span>`
+      : `<span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>`;
     return `<div class="feed-row${flash}" data-id="${r.id}">
       <span class="time">${fmtTime(r.ts)}</span>
       <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
       ${pill}
       <span class="num cache" title="cache reads (cheapest)">${fmtN.format(r.cache_read_tokens)}</span>
-      <span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>
+      ${cwriteCol}
       <span class="num in" title="uncached input">${fmtN.format(r.input_tokens)}</span>
       <span class="num out"${r.thinking_tokens > 0 ? ` title="incl. ${r.format === "anthropic" ? "~" : ""}${fmtN.format(r.thinking_tokens)} thinking tokens"` : ""}>${fmtN.format(r.output_tokens)}</span>
       <span class="cost">${fmtCost(costOf(r))}</span>
@@ -1359,13 +1375,14 @@ function renderTranscript(t) {
   el.modalTitle.innerHTML = `Request #${s.id} <small>${escapeHtml(s.model || s.path || "")} &middot; ${fmtTime(s.ts)}</small>`;
 
   const promptTotal = (s.input_tokens || 0) + (s.cache_read_tokens || 0) + (s.cache_creation_tokens || 0);
-  const cwriteSub = (s.cache_creation_tokens || 0) > 0
-    ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; 1.25× input rate</div>`
-    : "";
+  const isOpenai = s.format === "openai";
+  const cwriteCell = isOpenai
+    ? `<div class="summary-cell na" title="OpenAI usage spec doesn't expose cache writes"><div class="l">Cache write</div><div class="v">n/a</div><div style="font-size:10px;color:var(--muted);margin-top:2px">not reported by OpenAI</div></div>`
+    : `<div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${(s.cache_creation_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; 1.25× input rate</div>` : ""}</div>`;
   const summaryGrid = `
     <div class="summary-grid">
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
-      <div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${cwriteSub}</div>
+      ${cwriteCell}
       <div class="summary-cell"><div class="l">Input (uncached)</div><div class="v" style="color:var(--in)">${fmtN.format(s.input_tokens || 0)}</div>${promptTotal > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">of ${fmtN.format(promptTotal)} prompt tokens</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Output</div><div class="v" style="color:var(--out)">${fmtN.format(s.output_tokens || 0)}</div>${(s.thinking_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--think);margin-top:2px">incl. ${s.format === "anthropic" ? "~" : ""}${fmtN.format(s.thinking_tokens)} thinking</div>` : ""}</div>
       <div class="summary-cell"><div class="l">Cost (${escapeHtml(modelLabel())})</div><div class="v" style="color:var(--cost)">${fmtCost(costOf(s))}</div></div>
