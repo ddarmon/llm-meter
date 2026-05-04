@@ -19,6 +19,17 @@ differential card.
 
 ## Quick start
 
+### Install
+
+```bash
+git clone https://github.com/ddarmon/llm-meter.git
+cd llm-meter
+uv sync
+```
+
+Requires Python ≥ 3.11. No other manual dependencies --- managed by
+`uv`.
+
 ### Mode A --- meter a local model server
 
 ```bash
@@ -179,17 +190,6 @@ cache-read accounting and total cost are correct.
     `llm_meter/server.py` to add your own entries.
 -   ⚠️ **Cache-write 5m vs 1h split**: only Anthropic emits this. On
     OpenAI-protocol upstreams the cache-write tile shows `n/a`.
-
-## Installation
-
-```bash
-git clone https://github.com/ddarmon/llm-meter.git
-cd llm-meter
-uv sync
-```
-
-Requires Python ≥ 3.11. No other manual dependencies --- managed by
-`uv`.
 
 ## How it works
 
