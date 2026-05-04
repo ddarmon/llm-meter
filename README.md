@@ -61,6 +61,125 @@ Open **http://localhost:8001/** in your browser to see the live
 dashboard. Modes A and B can be combined: pass both `--upstream` and
 `--watch` and the dashboard shows the union.
 
+## Using other LLM servers
+
+The proxy is a generic reverse-proxy for the **OpenAI Chat Completions**
+(`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages`)
+protocols. Anything that speaks one of those works --- the proxy
+forwards every non-`/api/*` path through to `--upstream` unchanged and
+parses `usage` from the streaming SSE.
+
+The general pattern is the same for every backend:
+
+1.  Start the model server on some port (its native port).
+2.  Start `llm-meter` with `--upstream` pointing at that port.
+3.  Point your client (coding agent, SDK, `curl`) at the **proxy** port
+    instead of the upstream, using the upstream's API path scheme.
+
+Concrete recipes follow. Replace the model name with whatever you've
+loaded.
+
+### llama.cpp (`llama-server`)
+
+`llama-server` exposes an OpenAI-compatible API at
+`/v1/chat/completions`.
+
+```bash
+# Terminal 1: start llama.cpp
+llama-server -m path/to/model.gguf --host 127.0.0.1 --port 8000
+
+# Terminal 2: meter it
+uv run python -m llm_meter --port 8001 --upstream http://127.0.0.1:8000
+
+# Terminal 3: point any OpenAI client at the proxy
+export OPENAI_BASE_URL=http://127.0.0.1:8001/v1
+export OPENAI_API_KEY=sk-no-key-needed
+```
+
+### Ollama
+
+Ollama serves an OpenAI-compatible endpoint at
+`http://127.0.0.1:11434/v1/chat/completions` alongside its native API.
+
+```bash
+ollama serve                    # default port 11434
+ollama pull llama3.1:8b
+
+uv run python -m llm_meter --port 8001 --upstream http://127.0.0.1:11434
+
+# Client
+export OPENAI_BASE_URL=http://127.0.0.1:8001/v1
+export OPENAI_API_KEY=ollama
+```
+
+Ollama's *native* `/api/chat` endpoint is not metered (the format
+detector keys off `chat/completions` / `messages` in the path), so make
+sure your client is configured to use the OpenAI-compatible path.
+
+### vLLM
+
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
+
+uv run python -m llm_meter --port 8001 --upstream http://127.0.0.1:8000
+```
+
+### LM Studio
+
+LM Studio's local server (Developer → Start Server) defaults to port
+`1234` and speaks OpenAI Chat Completions.
+
+```bash
+uv run python -m llm_meter --port 8001 --upstream http://127.0.0.1:1234
+```
+
+### text-generation-webui (oobabooga)
+
+Run with `--api`; the OpenAI-compatible endpoint defaults to port
+`5000`.
+
+```bash
+python server.py --api --listen
+uv run python -m llm_meter --port 8001 --upstream http://127.0.0.1:5000
+```
+
+### Anthropic API (cloud)
+
+The same proxy works in front of the real Anthropic API. Useful when you
+want a request-by-request transcript and cost meter for production
+traffic.
+
+```bash
+uv run python -m llm_meter --port 8001 --upstream https://api.anthropic.com
+
+# Client (any Anthropic SDK)
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8001
+# Your API key is forwarded through unchanged via the x-api-key header.
+```
+
+### LiteLLM, OpenRouter, Together, Groq, Fireworks, ...
+
+Any cloud or self-hosted gateway that exposes `/v1/chat/completions`
+works the same way --- pass its base URL as `--upstream`. The dashboard
+will show a "Cache writes: n/a" tile because most non-Anthropic
+providers don't report cache-creation tokens, but input / output /
+cache-read accounting and total cost are correct.
+
+### What's metered vs. what isn't
+
+-   ✅ **Token counts**: input, output, cache reads --- whatever the
+    upstream reports in `usage` / `prompt_tokens_details.cached_tokens`.
+-   ✅ **Full transcripts and replay diffs**: protocol-agnostic; works
+    on any `/v1/chat/completions` or `/v1/messages` traffic.
+-   ⚠️ **Dollar cost**: the built-in pricing table only contains Claude
+    Opus / Sonnet / Haiku rates. For non-Anthropic models the dashboard
+    treats the cost figures as *"what this would cost on the selected
+    Claude model"* --- a useful comparison, but not the actual cost of
+    running your local / third-party model. Edit `PRICING` in
+    `llm_meter/server.py` to add your own entries.
+-   ⚠️ **Cache-write 5m vs 1h split**: only Anthropic emits this. On
+    OpenAI-protocol upstreams the cache-write tile shows `n/a`.
+
 ## Installation
 
 ```bash
