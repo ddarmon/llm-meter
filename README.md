@@ -7,7 +7,7 @@ agents. Two ways to use it:
     local oMLX server, the Anthropic API) and meter every request as it
     streams.
 2.  **Read Claude Code session logs** directly from `~/.claude/projects`
-    --- one-shot ingest, single-session view, or live tailing --- to see
+    — one-shot ingest, single-session view, or live tailing — to see
     exactly what your usage *would* cost on the metered API. Useful when
     you're on a Pro/Max subscription and want to know how much you'd be
     paying per call.
@@ -27,10 +27,10 @@ cd llm-meter
 uv sync
 ```
 
-Requires Python ≥ 3.11. No other manual dependencies --- managed by
+Requires Python ≥ 3.11. No other manual dependencies — managed by
 `uv`.
 
-### Mode A --- meter a local model server
+### Mode A — meter a local model server
 
 ```bash
 # Start oMLX (your local model server) on port 8000
@@ -50,7 +50,7 @@ omlx-cli launch pi \
   --api-key "<YOUR_API_KEY>"
 ```
 
-### Mode B --- meter Claude Code without a proxy
+### Mode B — meter Claude Code without a proxy
 
 ```bash
 # Replay every Claude Code session you've ever run, then keep watching for
@@ -76,7 +76,7 @@ dashboard. Modes A and B can be combined: pass both `--upstream` and
 
 The proxy is a generic reverse-proxy for the **OpenAI Chat Completions**
 (`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages`)
-protocols. Anything that speaks one of those works --- the proxy
+protocols. Anything that speaks one of those works — the proxy
 forwards every non-`/api/*` path through to `--upstream` unchanged and
 parses `usage` from the streaming SSE.
 
@@ -171,21 +171,21 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8001
 ### LiteLLM, OpenRouter, Together, Groq, Fireworks, ...
 
 Any cloud or self-hosted gateway that exposes `/v1/chat/completions`
-works the same way --- pass its base URL as `--upstream`. The dashboard
+works the same way — pass its base URL as `--upstream`. The dashboard
 will show a "Cache writes: n/a" tile because most non-Anthropic
 providers don't report cache-creation tokens, but input / output /
 cache-read accounting and total cost are correct.
 
 ### What's metered vs. what isn't
 
--   ✅ **Token counts**: input, output, cache reads --- whatever the
+-   ✅ **Token counts**: input, output, cache reads — whatever the
     upstream reports in `usage` / `prompt_tokens_details.cached_tokens`.
 -   ✅ **Full transcripts and replay diffs**: protocol-agnostic; works
     on any `/v1/chat/completions` or `/v1/messages` traffic.
 -   ⚠️ **Dollar cost**: the built-in pricing table only contains Claude
     Opus / Sonnet / Haiku rates. For non-Anthropic models the dashboard
     treats the cost figures as *"what this would cost on the selected
-    Claude model"* --- a useful comparison, but not the actual cost of
+    Claude model"* — a useful comparison, but not the actual cost of
     running your local / third-party model. Edit `PRICING` in
     `llm_meter/server.py` to add your own entries.
 -   ⚠️ **Cache-write 5m vs 1h split**: only Anthropic emits this. On
@@ -209,7 +209,7 @@ Client → llm-meter (port 8001) → Upstream (oMLX / Anthropic, port 8000)
 2.  **Accumulates** streaming SSE events to reconstruct the full
     response (text + tool calls + usage metadata, including the 5m / 1h
     cache-write split when the upstream emits it).
-3.  **Computes replay diffs** between consecutive turns in a session ---
+3.  **Computes replay diffs** between consecutive turns in a session —
     how many messages were replayed from history vs. new this turn.
 4.  **Calculates costs** using built-in pricing tables (input / output /
     cache-read / cache-write 5m / cache-write 1h).
@@ -255,13 +255,13 @@ directly (no proxy needed):
 
 The dashboard at `http://<host>:<port>/` shows:
 
--   **Header** --- live status dot, cumulative / per-turn toggle, reset
+-   **Header** — live status dot, cumulative / per-turn toggle, reset
     button
--   **Cost card** --- total dollar amount (or per-turn), selected
+-   **Cost card** — total dollar amount (or per-turn), selected
     model's rates
--   **Meters** --- four tiles in prompt-cost order (cache reads, cache
+-   **Meters** — four tiles in prompt-cost order (cache reads, cache
     writes, input uncached, output) with sub-metrics
--   **Request feed** --- most recent requests with model, tokens, cost;
+-   **Request feed** — most recent requests with model, tokens, cost;
     click any row for the full transcript modal
 
 The transcript modal shows:
