@@ -121,7 +121,12 @@ def _consume(rec: dict, state: _ParseState, source: Path) -> Iterator[SessionTur
         return
 
     msg = rec.get("message") or {}
-    req_id = rec.get("requestId")
+    # Claude Code routed through AWS Bedrock (CLAUDE_CODE_USE_BEDROCK=1)
+    # omits the top-level `requestId` field; the stable per-response ID
+    # lives at `message.id` (e.g. "msg_bdrk_..."). Duplicate records for
+    # the same response repeat that id with identical `usage`, so it
+    # dedupes correctly.
+    req_id = rec.get("requestId") or msg.get("id")
     if not req_id:
         return
     content = msg.get("content") or []
