@@ -294,6 +294,22 @@
   }
   .ml-pill.input { background: var(--in-soft); color: var(--in); }
   .ml-pill.output { background: var(--out-soft); color: var(--out); }
+  .ml-pill.cache { background: var(--cache-soft); color: var(--cache); }
+  .ml-pill.cwrite { background: var(--cwrite-soft); color: var(--cwrite); }
+  .multiplier-intro {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 8px 0 10px;
+    border-bottom: 1px solid #ffcecb;
+    margin-bottom: 4px;
+    line-height: 1.5;
+  }
+  .multiplier-intro .ml-pills {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
 
   /* ---------- feed ---------- */
   .feed {
@@ -916,10 +932,40 @@ const fmtRate = (n) => n >= 1 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
 function ratesLine() {
   const p = pricingTable[pricingModel];
   if (!p) return " ";
-  return `${fmtRate(p.input)} / ${fmtRate(p.output)} per Mtok &middot; cache reads ${fmtRate(p.cache_read)} / Mtok`;
+  return `${fmtRate(p.input)} / ${fmtRate(p.output)} per Mtok &middot; ` +
+    `cache read ${fmtRate(p.cache_read)} &middot; ` +
+    `cache write 5m ${fmtRate(p.cache_write_5m)} / 1h ${fmtRate(p.cache_write_1h)}`;
 }
 function modelLabel() {
   return (pricingTable[pricingModel] && pricingTable[pricingModel].label) || pricingModel;
+}
+
+// Derive a label like "1.25× input rate" / "2× input rate" / "5m/1h mix"
+// from the 5m vs 1h split on a record (or totals object).
+function cacheWriteRateLabel(obj) {
+  const c5 = (obj && obj.cache_creation_5m_tokens) || 0;
+  const c1 = (obj && obj.cache_creation_1h_tokens) || 0;
+  if (c5 === 0 && c1 === 0) {
+    // Older proxy upstreams report only the rolled-up field; we price it
+    // at the 5m rate (see server _cost fallback).
+    return (obj && obj.cache_creation_tokens > 0) ? "1.25× input rate" : "";
+  }
+  if (c1 === 0) return "1.25× input rate &middot; 5m";
+  if (c5 === 0) return "2× input rate &middot; 1h";
+  const pct1h = c1 / (c5 + c1) * 100;
+  return `mix &middot; 1.25×/2× &middot; ${pct1h.toFixed(0)}% 1h`;
+}
+
+// Compact "100% 1h" / "5m 6% · 1h 94%" share string for sub-text on the
+// cumulative cache-write tile.
+function cacheWriteSplitLabel(obj) {
+  const c5 = (obj && obj.cache_creation_5m_tokens) || 0;
+  const c1 = (obj && obj.cache_creation_1h_tokens) || 0;
+  if (c5 === 0 && c1 === 0) return "";
+  if (c5 === 0) return "100% 1h &middot; 2× input rate";
+  if (c1 === 0) return "100% 5m &middot; 1.25× input rate";
+  const total = c5 + c1;
+  return `5m ${(c5 / total * 100).toFixed(0)}% &middot; 1h ${(c1 / total * 100).toFixed(0)}%`;
 }
 
 function renderModelToggle() {
@@ -978,7 +1024,9 @@ function renderHeadline(snap) {
     el.sInput.textContent = totalIn > 0
       ? `${(t.input_tokens / totalIn * 100).toFixed(1)}% uncached`
       : " ";
-    el.sCwrite.textContent = onlyOpenai ? "not reported by OpenAI" : " ";
+    el.sCwrite.innerHTML = onlyOpenai
+      ? "not reported by OpenAI"
+      : (cacheWriteSplitLabel(t) || " ");
     el.sOutput.textContent = t.thinking_tokens > 0
       ? `incl. ${fmtN.format(t.thinking_tokens)} thinking` : " ";
   } else {
@@ -1017,9 +1065,9 @@ function renderHeadline(snap) {
     el.sInput.textContent = promptSize > 0
       ? `${fmtN.format(promptSize)} total prompt tokens`
       : " ";
-    el.sCwrite.textContent = turnIsOpenai
+    el.sCwrite.innerHTML = turnIsOpenai
       ? "not reported by OpenAI"
-      : (latest.cache_creation_tokens > 0 ? "1.25× input rate" : " ");
+      : (cacheWriteRateLabel(latest) || " ");
     let modelInfo = `model: ${latest.model || "?"}`;
     if (latest.thinking_tokens > 0) {
       const approx = latest.format === "anthropic" ? "~" : "";
@@ -1054,9 +1102,11 @@ function renderFeed(snap) {
     } else {
       pill = `<span class="replay-pill"><span class="new-n">+${fmtN.format(rep.new_count || 0)}</span> &middot; ${fmtN.format(rep.replayed_count || 0)} replayed</span>`;
     }
+    const cwriteRate = cacheWriteRateLabel(r).replace(/&middot;/g, "·").replace(/&times;/g, "×");
+    const cwriteTitle = cwriteRate ? `cache writes (${cwriteRate})` : "cache writes";
     const cwriteCol = r.format === "openai"
       ? `<span class="num cwrite na" title="OpenAI usage spec doesn't expose cache writes">n/a</span>`
-      : `<span class="num cwrite" title="cache writes (1.25× input rate)">${fmtN.format(r.cache_creation_tokens)}</span>`;
+      : `<span class="num cwrite" title="${escapeHtml(cwriteTitle)}">${fmtN.format(r.cache_creation_tokens)}</span>`;
     return `<div class="feed-row${flash}" data-id="${r.id}">
       <span class="time">${fmtTime(r.ts)}</span>
       <span class="model" title="${escapeHtml(r.model || "")}">${escapeHtml(r.model || r.path)}</span>
@@ -1075,8 +1125,21 @@ function renderFeed(snap) {
 function renderMultipliers(snap) {
   const m = snap.multipliers || [];
   const el = document.getElementById("multiplier-rows");
-  if (!m.length) { el.innerHTML = ""; return; }
-  el.innerHTML = m.map((r) => `
+  // Within-model cache multipliers are the same across all Anthropic
+  // models (read = 0.1× input, cache write 5m = 1.25× input, 1h = 2× input).
+  // Show that once at the top so the "cache write 1h costs 2× input" rule
+  // is visible without inspecting the rates line per model.
+  const intro = `
+    <div class="multiplier-intro">
+      Within each model, cache tokens are priced relative to that model's input rate:
+      <div class="ml-pills">
+        <span class="ml-pill cache">cache read &middot; 0.1&times; input</span>
+        <span class="ml-pill cwrite">cache write 5m &middot; 1.25&times; input</span>
+        <span class="ml-pill cwrite">cache write 1h &middot; 2&times; input</span>
+        <span class="ml-pill output">output &middot; 5&times; input</span>
+      </div>
+    </div>`;
+  const pairs = m.map((r) => `
     <div class="multiplier-row">
       <span class="ml-from">${escapeHtml(r.from_label)}</span>
       <span class="ml-arrow">costs</span>
@@ -1088,6 +1151,7 @@ function renderMultipliers(snap) {
       <span class="ml-to">${escapeHtml(r.to_label)}</span>
     </div>
   `).join("");
+  el.innerHTML = intro + pairs;
 }
 
 function renderSubscription(snap) {
@@ -1475,9 +1539,10 @@ function renderTranscript(t) {
 
   const promptTotal = (s.input_tokens || 0) + (s.cache_read_tokens || 0) + (s.cache_creation_tokens || 0);
   const isOpenai = s.format === "openai";
+  const cwriteRateLabel = cacheWriteRateLabel(s);
   const cwriteCell = isOpenai
     ? `<div class="summary-cell na" title="OpenAI usage spec doesn't expose cache writes"><div class="l">Cache write</div><div class="v">n/a</div><div style="font-size:10px;color:var(--muted);margin-top:2px">not reported by OpenAI</div></div>`
-    : `<div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${(s.cache_creation_tokens || 0) > 0 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; 1.25× input rate</div>` : ""}</div>`;
+    : `<div class="summary-cell"><div class="l">Cache write</div><div class="v" style="color:var(--cwrite)">${fmtN.format(s.cache_creation_tokens || 0)}</div>${cwriteRateLabel ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">new this turn &middot; ${cwriteRateLabel}</div>` : ""}</div>`;
   const summaryGrid = `
     <div class="summary-grid">
       <div class="summary-cell"><div class="l">Cache read</div><div class="v" style="color:var(--cache)">${fmtN.format(s.cache_read_tokens || 0)}</div></div>
